@@ -33,10 +33,18 @@
               <line x1="12" y1="8" x2="12" y2="16"/>
               <line x1="8" y1="12" x2="16" y2="12"/>
             </svg>
-            Create Room
+            New Jam
           </button>
 
-          <div class="divider-or"><span>or</span></div>
+          <button id="btn-my-jams" class="btn btn-accent-outline">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+            </svg>
+            My Jams
+          </button>
+
+          <div class="divider-or"><span>or join a room</span></div>
 
           <label for="room-id-input">Room Code</label>
           <input type="text" id="room-id-input" placeholder="Enter room code" maxlength="8" autocomplete="off" />
@@ -51,7 +59,29 @@
         </div>
       </div>
 
-      <p class="lobby-hint">Up to 4 users can collaborate in real-time</p>
+      <p class="lobby-hint">Up to 4 users can collaborate in real-time. All jams are auto-saved.</p>
+    </div>
+  </div>
+
+  <!-- ==================== NOTEBOOK (My Jams) ==================== -->
+  <div id="notebook" class="notebook hidden">
+    <header class="notebook-header">
+      <button id="btn-notebook-back" class="btn-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="19" y1="12" x2="5" y2="12"/>
+          <polyline points="12 19 5 12 12 5"/>
+        </svg>
+      </button>
+      <div class="notebook-title-area">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+          <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+        </svg>
+        <h2>My Jams</h2>
+      </div>
+    </header>
+    <div id="jams-grid" class="jams-grid">
+      <!-- Populated dynamically -->
     </div>
   </div>
 
@@ -66,6 +96,7 @@
             <path d="M14 34V14h4l6 10 6-10h4v20h-4V22l-6 10-6-10v12h-4z" fill="#fff"/>
           </svg>
         </div>
+        <div id="jam-title" class="jam-title" contenteditable="true" spellcheck="false">Untitled Jam</div>
         <div class="room-info">
           <span class="room-label">Room:</span>
           <code id="room-code" class="room-code"></code>
@@ -166,6 +197,13 @@
             <path d="M3 21l7-7"/>
           </svg>
         </button>
+        <button id="btn-save-now" class="tool-btn" title="Save now (Ctrl+S)">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+            <polyline points="17 21 17 13 7 13 7 21"/>
+            <polyline points="7 3 7 8 15 8"/>
+          </svg>
+        </button>
       </div>
 
       <div class="toolbar-section">
@@ -217,6 +255,7 @@
       <span><kbd>E</kbd> Eraser</span>
       <span><kbd>[ ]</kbd> Size</span>
       <span><kbd>Ctrl+Z</kbd> Undo</span>
+      <span><kbd>Ctrl+S</kbd> Save</span>
       <span><kbd>Alt+Drag</kbd> Pan</span>
       <span><kbd>Scroll</kbd> Zoom</span>
     </div>

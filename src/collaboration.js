@@ -35,15 +35,16 @@ export class CollaborationManager {
       'stroke-start', 'stroke-move', 'stroke-end', 'erase',
       'cursor-move', 'user-joined', 'user-left',
       'load-pdf', 'pdf-page-change', 'clear-board', 'sync-strokes',
+      'jam-renamed',
     ];
     events.forEach((evt) => {
       this.socket.on(evt, (data) => this._emit(evt, data));
     });
   }
 
-  createRoom(name) {
+  createRoom(name, jamId) {
     return new Promise((resolve) => {
-      this.socket.emit('create-room', { name }, (response) => {
+      this.socket.emit('create-room', { name, jamId }, (response) => {
         if (response.success) {
           this.roomId = response.roomId;
           this.userId = response.userId;
@@ -103,6 +104,14 @@ export class CollaborationManager {
 
   sendUndo(data) {
     this.socket?.emit('undo', data);
+  }
+
+  saveThumbnail(thumbnail) {
+    this.socket?.emit('save-thumbnail', { thumbnail });
+  }
+
+  renameJam(title) {
+    this.socket?.emit('rename-jam', { title });
   }
 
   // Simple event emitter

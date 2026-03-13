@@ -226,6 +226,15 @@ body {
   background: var(--bg-surface-hover);
 }
 
+.btn-accent-outline {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.btn-accent-outline:hover {
+  background: var(--accent-light);
+}
+
 /* ============================
    Top Bar
    ============================ */
@@ -252,6 +261,31 @@ body {
 .logo-mini {
   display: flex;
   align-items: center;
+}
+
+.jam-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 2px 8px;
+  border-radius: 4px;
+  outline: none;
+  border: 1px solid transparent;
+  transition: border-color 0.2s;
+  max-width: 200px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: text;
+}
+
+.jam-title:hover {
+  border-color: var(--border);
+}
+
+.jam-title:focus {
+  border-color: var(--accent);
+  background: var(--bg-surface);
 }
 
 .room-info {
@@ -585,6 +619,219 @@ body {
 .toast-error {
   border-color: var(--danger);
   color: #FCA5A5;
+}
+
+/* ============================
+   Notebook (My Jams)
+   ============================ */
+
+.notebook {
+  height: 100vh;
+  background: var(--bg-primary);
+  overflow-y: auto;
+}
+
+.notebook-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 32px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.notebook-title-area {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-primary);
+}
+
+.notebook-title-area h2 {
+  font-size: 22px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), #4ECDC4);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.notebook-title-area svg {
+  color: var(--accent);
+}
+
+.jams-grid {
+  padding: 24px 32px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.jams-loading {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 60px 0;
+  font-size: 15px;
+}
+
+.jams-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 80px 0;
+}
+
+.jams-empty svg {
+  margin-bottom: 16px;
+  opacity: 0.4;
+}
+
+.jams-empty p {
+  font-size: 16px;
+  margin-bottom: 4px;
+}
+
+.jams-empty-hint {
+  font-size: 13px !important;
+  color: var(--text-muted);
+}
+
+.jams-date-section {
+  margin-bottom: 28px;
+}
+
+.jams-date-header {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.jams-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.jam-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.jam-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+}
+
+.jam-card-deleting {
+  opacity: 0;
+  transform: scale(0.9) !important;
+  pointer-events: none;
+}
+
+.jam-card-thumb {
+  height: 140px;
+  background: #2B2D42;
+  position: relative;
+  overflow: hidden;
+}
+
+.jam-card-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.jam-card-thumb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  opacity: 0.3;
+}
+
+.jam-card-pdf-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--danger);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.jam-card-info {
+  padding: 12px 14px;
+}
+
+.jam-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.jam-card-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.jam-card-actions {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.jam-card:hover .jam-card-actions {
+  opacity: 1;
+}
+
+.jam-card-btn {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.jam-card-btn:hover {
+  color: white;
+}
+
+.jam-card-open:hover {
+  background: var(--accent);
+}
+
+.jam-card-delete:hover {
+  background: var(--danger);
 }
 
 /* ============================
