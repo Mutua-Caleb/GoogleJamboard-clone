@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CollabBoard - Real-time Collaborative Whiteboard</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <!-- ==================== LOBBY ==================== -->
+  <div id="lobby" class="lobby">
+    <div class="lobby-card">
+      <div class="lobby-logo">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+          <rect width="48" height="48" rx="12" fill="#7C3AED"/>
+          <path d="M14 34V14h4l6 10 6-10h4v20h-4V22l-6 10-6-10v12h-4z" fill="#fff"/>
+        </svg>
+        <h1>CollabBoard</h1>
+      </div>
+      <p class="lobby-subtitle">Real-time collaborative whiteboard for online teaching</p>
+
+      <div class="lobby-form">
+        <label for="name-input">Your Name</label>
+        <input type="text" id="name-input" placeholder="Enter your name" maxlength="20" autocomplete="off" />
+
+        <div class="lobby-actions">
+          <button id="btn-create" class="btn btn-primary">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <line x1="12" y1="8" x2="12" y2="16"/>
+              <line x1="8" y1="12" x2="16" y2="12"/>
+            </svg>
+            Create Room
+          </button>
+
+          <div class="divider-or"><span>or</span></div>
+
+          <label for="room-id-input">Room Code</label>
+          <input type="text" id="room-id-input" placeholder="Enter room code" maxlength="8" autocomplete="off" />
+          <button id="btn-join" class="btn btn-secondary">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+              <polyline points="10 17 15 12 10 7"/>
+              <line x1="15" y1="12" x2="3" y2="12"/>
+            </svg>
+            Join Room
+          </button>
+        </div>
+      </div>
+
+      <p class="lobby-hint">Up to 4 users can collaborate in real-time</p>
+    </div>
+  </div>
+
+  <!-- ==================== BOARD ==================== -->
+  <div id="board" class="board hidden">
+    <!-- Top Bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="logo-mini">
+          <svg width="28" height="28" viewBox="0 0 48 48" fill="none">
+            <rect width="48" height="48" rx="12" fill="#7C3AED"/>
+            <path d="M14 34V14h4l6 10 6-10h4v20h-4V22l-6 10-6-10v12h-4z" fill="#fff"/>
+          </svg>
+        </div>
+        <div class="room-info">
+          <span class="room-label">Room:</span>
+          <code id="room-code" class="room-code"></code>
+          <button id="btn-copy-room" class="btn-icon" title="Copy room code">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+          </button>
+        </div>
+        <div id="connection-status" class="status-dot connected">Connected</div>
+      </div>
+
+      <div class="topbar-center">
+        <div id="user-list" class="user-list"></div>
+        <span id="user-count" class="user-count">1/4</span>
+      </div>
+
+      <div class="topbar-right">
+        <button id="btn-leave" class="btn btn-danger btn-sm">Leave</button>
+      </div>
+    </header>
+
+    <!-- Toolbar -->
+    <aside class="toolbar">
+      <div class="toolbar-section">
+        <span class="toolbar-label">Tools</span>
+        <button class="tool-btn" data-tool="pen" title="Pen (P)">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 19l7-7 3 3-7 7-3-3z"/>
+            <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
+            <path d="M2 2l7.586 7.586"/>
+            <circle cx="11" cy="11" r="2"/>
+          </svg>
+        </button>
+        <button class="tool-btn" data-tool="pencil" title="Pencil (L)">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="2" x2="22" y2="6"/>
+            <path d="M7.5 20.5L2 22l1.5-5.5L17 3l4 4L7.5 20.5z"/>
+          </svg>
+        </button>
+        <button class="tool-btn" data-tool="highlighter" title="Highlighter (H)">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 11l-6 6v3h9l3-3"/>
+            <path d="M22 12l-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>
+          </svg>
+        </button>
+        <button class="tool-btn" data-tool="eraser" title="Eraser (E)">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 20H7L3 16a1 1 0 0 1 0-1.4l9.6-9.6a2 2 0 0 1 2.8 0l5.2 5.2a2 2 0 0 1 0 2.8L15 18.6"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="toolbar-section">
+        <span class="toolbar-label">Colors</span>
+        <div class="color-grid">
+          <button class="color-swatch" data-color="#FFFFFF" style="background:#FFFFFF" title="White"></button>
+          <button class="color-swatch" data-color="#FF6B6B" style="background:#FF6B6B" title="Red"></button>
+          <button class="color-swatch" data-color="#FFE66D" style="background:#FFE66D" title="Yellow"></button>
+          <button class="color-swatch" data-color="#4ECDC4" style="background:#4ECDC4" title="Teal"></button>
+          <button class="color-swatch" data-color="#45B7D1" style="background:#45B7D1" title="Blue"></button>
+          <button class="color-swatch" data-color="#96CEB4" style="background:#96CEB4" title="Green"></button>
+          <button class="color-swatch" data-color="#F38181" style="background:#F38181" title="Coral"></button>
+          <button class="color-swatch" data-color="#AA96DA" style="background:#AA96DA" title="Purple"></button>
+          <button class="color-swatch" data-color="#FCBAD3" style="background:#FCBAD3" title="Pink"></button>
+          <button class="color-swatch" data-color="#FF8B94" style="background:#FF8B94" title="Salmon"></button>
+          <button class="color-swatch" data-color="#A8E6CF" style="background:#A8E6CF" title="Mint"></button>
+          <button class="color-swatch" data-color="#FFD93D" style="background:#FFD93D" title="Gold"></button>
+        </div>
+      </div>
+
+      <div class="toolbar-section">
+        <span class="toolbar-label">Size</span>
+        <input type="range" id="size-slider" min="1" max="50" value="3" class="size-slider" />
+        <span id="size-value" class="size-value">3</span>
+      </div>
+
+      <div class="toolbar-section">
+        <span class="toolbar-label">Actions</span>
+        <button id="btn-undo" class="tool-btn" title="Undo (Ctrl+Z)">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="1 4 1 10 7 10"/>
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+          </svg>
+        </button>
+        <button id="btn-clear" class="tool-btn" title="Clear board">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          </svg>
+        </button>
+        <button id="btn-reset-view" class="tool-btn" title="Reset view">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 3h6v6"/>
+            <path d="M9 21H3v-6"/>
+            <path d="M21 3l-7 7"/>
+            <path d="M3 21l7-7"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="toolbar-section">
+        <span class="toolbar-label">PDF</span>
+        <button id="btn-upload-pdf" class="tool-btn" title="Upload PDF">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="12" y1="18" x2="12" y2="12"/>
+            <line x1="9" y1="15" x2="12" y2="12"/>
+            <line x1="15" y1="15" x2="12" y2="12"/>
+          </svg>
+        </button>
+        <input type="file" id="pdf-file-input" accept="application/pdf" class="hidden" />
+      </div>
+
+      <div id="pdf-controls" class="toolbar-section hidden">
+        <button id="btn-pdf-prev" class="tool-btn" title="Previous page">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+        </button>
+        <span id="pdf-page-info" class="pdf-page-info">1 / 1</span>
+        <button id="btn-pdf-next" class="tool-btn" title="Next page">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </button>
+        <button id="btn-close-pdf" class="tool-btn tool-btn-danger" title="Close PDF">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Canvas Area -->
+    <main id="canvas-area" class="canvas-area">
+      <div id="pdf-container" class="pdf-container hidden"></div>
+      <canvas id="draw-canvas" class="draw-canvas"></canvas>
+    </main>
+
+    <!-- Keyboard shortcuts overlay -->
+    <div id="shortcuts-hint" class="shortcuts-hint">
+      <span><kbd>P</kbd> Pen</span>
+      <span><kbd>L</kbd> Pencil</span>
+      <span><kbd>H</kbd> Highlight</span>
+      <span><kbd>E</kbd> Eraser</span>
+      <span><kbd>[ ]</kbd> Size</span>
+      <span><kbd>Ctrl+Z</kbd> Undo</span>
+      <span><kbd>Alt+Drag</kbd> Pan</span>
+      <span><kbd>Scroll</kbd> Zoom</span>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script type="module" src="/src/app.js"></script>
+</body>
+</html>
