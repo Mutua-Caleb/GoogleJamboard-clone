@@ -289,63 +289,81 @@ export class DrawingEngine {
     const { ctx } = this;
     const points = stroke.points;
 
-    for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1];
-      const curr = points[i];
-      const pressure = (prev.pressure + curr.pressure) / 2;
-      const width = Math.max(1, stroke.size * pressure);
+    // Calculate average pressure for line width
+    let avgPressure = 0;
+    for (const p of points) avgPressure += (p.pressure || 0.5);
+    avgPressure /= points.length;
+    const width = Math.max(1, stroke.size * avgPressure);
 
-      ctx.strokeStyle = stroke.color;
-      ctx.lineWidth = width;
-      ctx.beginPath();
+    ctx.strokeStyle = stroke.color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
 
-      if (i === 1) {
-        ctx.moveTo(prev.x, prev.y);
-        ctx.lineTo(curr.x, curr.y);
-      } else {
+    if (points.length === 2) {
+      ctx.lineTo(points[1].x, points[1].y);
+    } else {
+      // Draw smooth quadratic bezier through midpoints
+      for (let i = 1; i < points.length - 1; i++) {
         const mid = {
-          x: (prev.x + curr.x) / 2,
-          y: (prev.y + curr.y) / 2,
+          x: (points[i].x + points[i + 1].x) / 2,
+          y: (points[i].y + points[i + 1].y) / 2,
         };
-        ctx.moveTo(prev.x, prev.y);
-        ctx.quadraticCurveTo(prev.x, prev.y, mid.x, mid.y);
+        ctx.quadraticCurveTo(points[i].x, points[i].y, mid.x, mid.y);
       }
-      ctx.stroke();
+      // Connect to the last point
+      const last = points[points.length - 1];
+      ctx.lineTo(last.x, last.y);
     }
+
+    ctx.stroke();
   }
 
   _drawPencilStroke(stroke) {
     const { ctx } = this;
     const points = stroke.points;
 
-    for (let i = 1; i < points.length; i++) {
+    // Average pressure for consistent width
+    let avgPressure = 0;
+    for (const p of points) avgPressure += (p.pressure || 0.5);
+    avgPressure /= points.length;
+    const width = Math.max(1, stroke.size * avgPressure);
+
+    // Base continuous stroke
+    ctx.strokeStyle = stroke.color;
+    ctx.lineWidth = width;
+    ctx.globalAlpha = (stroke.opacity ?? 1) * (0.6 + avgPressure * 0.4);
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+
+    if (points.length === 2) {
+      ctx.lineTo(points[1].x, points[1].y);
+    } else {
+      for (let i = 1; i < points.length - 1; i++) {
+        const mid = {
+          x: (points[i].x + points[i + 1].x) / 2,
+          y: (points[i].y + points[i + 1].y) / 2,
+        };
+        ctx.quadraticCurveTo(points[i].x, points[i].y, mid.x, mid.y);
+      }
+      ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+    }
+    ctx.stroke();
+
+    // Grain texture overlay
+    ctx.globalAlpha = (stroke.opacity ?? 1) * 0.15;
+    ctx.fillStyle = stroke.color;
+    for (let i = 1; i < points.length; i += 2) {
       const prev = points[i - 1];
       const curr = points[i];
-      const pressure = (prev.pressure + curr.pressure) / 2;
-      const width = Math.max(1, stroke.size * pressure);
-
-      // Base stroke
-      ctx.strokeStyle = stroke.color;
-      ctx.lineWidth = width;
-      ctx.globalAlpha = (stroke.opacity ?? 1) * (0.6 + pressure * 0.4);
-      ctx.beginPath();
-      ctx.moveTo(prev.x, prev.y);
-      ctx.lineTo(curr.x, curr.y);
-      ctx.stroke();
-
-      // Grain texture
-      if (i % 2 === 0) {
-        ctx.globalAlpha = (stroke.opacity ?? 1) * 0.15;
-        const dx = curr.x - prev.x;
-        const dy = curr.y - prev.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        for (let j = 0; j < dist; j += 3) {
-          const t = j / dist;
-          const x = prev.x + dx * t + (Math.random() - 0.5) * width;
-          const y = prev.y + dy * t + (Math.random() - 0.5) * width;
-          ctx.fillStyle = stroke.color;
-          ctx.fillRect(x, y, 1, 1);
-        }
+      const dx = curr.x - prev.x;
+      const dy = curr.y - prev.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      for (let j = 0; j < dist; j += 3) {
+        const t = j / dist;
+        const x = prev.x + dx * t + (Math.random() - 0.5) * width;
+        const y = prev.y + dy * t + (Math.random() - 0.5) * width;
+        ctx.fillRect(x, y, 1, 1);
       }
     }
     ctx.globalAlpha = stroke.opacity ?? 1;
