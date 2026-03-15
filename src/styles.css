@@ -531,6 +531,58 @@ body {
   z-index: 10;
 }
 
+/* Canvas scrollbars */
+
+.canvas-scrollbar {
+  position: absolute;
+  z-index: 20;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.canvas-area:hover .canvas-scrollbar,
+.canvas-scrollbar.dragging {
+  opacity: 1;
+}
+
+.canvas-scrollbar-v {
+  top: 0;
+  right: 0;
+  width: 12px;
+  height: 100%;
+  padding: 2px;
+}
+
+.canvas-scrollbar-h {
+  bottom: 0;
+  left: 0;
+  height: 12px;
+  width: calc(100% - 12px);
+  padding: 2px;
+}
+
+.canvas-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+  min-width: 30px;
+  min-height: 30px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.canvas-scrollbar-thumb:hover,
+.canvas-scrollbar-thumb.active {
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.canvas-scrollbar-v .canvas-scrollbar-thumb {
+  width: 100%;
+}
+
+.canvas-scrollbar-h .canvas-scrollbar-thumb {
+  height: 100%;
+}
+
 /* PDF mode */
 
 .pdf-container {

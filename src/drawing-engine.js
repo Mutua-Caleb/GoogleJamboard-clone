@@ -33,7 +33,14 @@ export class DrawingEngine {
     // Offscreen canvas for pencil texture
     this.pencilPattern = this._createPencilPattern();
 
+    // Scrollbar elements
+    this._scrollbarV = document.getElementById('scrollbar-v');
+    this._scrollbarH = document.getElementById('scrollbar-h');
+    this._thumbV = document.getElementById('scrollbar-v-thumb');
+    this._thumbH = document.getElementById('scrollbar-h-thumb');
+
     this._setupEvents();
+    this._setupScrollbars();
     this._startRenderLoop();
   }
 
@@ -205,6 +212,166 @@ export class DrawingEngine {
     }
   }
 
+  // --- Scrollbars ---
+
+  _getContentBounds() {
+    // Compute bounding box of all stroke points, with padding
+    const PADDING = 200;
+    const viewW = this.canvas.clientWidth;
+    const viewH = this.canvas.clientHeight;
+
+    // Default content area: at least the visible viewport at identity transform
+    let minX = 0, minY = 0, maxX = viewW, maxY = viewH;
+
+    for (const stroke of this.strokes) {
+      if (!stroke.points) continue;
+      for (const p of stroke.points) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+
+    if (this.currentStroke?.points) {
+      for (const p of this.currentStroke.points) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+
+    return {
+      minX: minX - PADDING,
+      minY: minY - PADDING,
+      maxX: maxX + PADDING,
+      maxY: maxY + PADDING,
+    };
+  }
+
+  _setupScrollbars() {
+    if (!this._thumbV || !this._thumbH) return;
+
+    // Vertical scrollbar drag
+    this._setupScrollbarDrag(this._thumbV, this._scrollbarV, 'y');
+    // Horizontal scrollbar drag
+    this._setupScrollbarDrag(this._thumbH, this._scrollbarH, 'x');
+
+    // Click on scrollbar track to jump
+    this._scrollbarV.addEventListener('pointerdown', (e) => {
+      if (e.target === this._scrollbarV) this._scrollbarTrackClick(e, 'y');
+    });
+    this._scrollbarH.addEventListener('pointerdown', (e) => {
+      if (e.target === this._scrollbarH) this._scrollbarTrackClick(e, 'x');
+    });
+  }
+
+  _setupScrollbarDrag(thumb, track, axis) {
+    let dragging = false;
+    let startPos = 0;
+    let startTransform = 0;
+
+    thumb.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragging = true;
+      thumb.classList.add('active');
+      track.classList.add('dragging');
+      startPos = axis === 'y' ? e.clientY : e.clientX;
+      startTransform = axis === 'y' ? this.transform.y : this.transform.x;
+      thumb.setPointerCapture(e.pointerId);
+    });
+
+    thumb.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      e.preventDefault();
+      const bounds = this._getContentBounds();
+      const scale = this.transform.scale;
+      const viewSize = axis === 'y' ? this.canvas.clientHeight : this.canvas.clientWidth;
+      const contentSize = axis === 'y' ? (bounds.maxY - bounds.minY) : (bounds.maxX - bounds.minX);
+      const totalContentPx = contentSize * scale;
+      const trackSize = axis === 'y' ? track.clientHeight : track.clientWidth;
+
+      const delta = (axis === 'y' ? e.clientY : e.clientX) - startPos;
+      // Map track pixels to canvas pan pixels
+      const panDelta = -(delta / trackSize) * totalContentPx;
+      if (axis === 'y') {
+        this.transform.y = startTransform + panDelta;
+      } else {
+        this.transform.x = startTransform + panDelta;
+      }
+    });
+
+    const stopDrag = () => {
+      if (!dragging) return;
+      dragging = false;
+      thumb.classList.remove('active');
+      track.classList.remove('dragging');
+    };
+    thumb.addEventListener('pointerup', stopDrag);
+    thumb.addEventListener('pointercancel', stopDrag);
+  }
+
+  _scrollbarTrackClick(e, axis) {
+    const bounds = this._getContentBounds();
+    const scale = this.transform.scale;
+    const track = axis === 'y' ? this._scrollbarV : this._scrollbarH;
+    const rect = track.getBoundingClientRect();
+    const clickPos = axis === 'y' ? (e.clientY - rect.top) : (e.clientX - rect.left);
+    const trackSize = axis === 'y' ? rect.height : rect.width;
+    const ratio = clickPos / trackSize;
+
+    const contentMin = axis === 'y' ? bounds.minY : bounds.minX;
+    const contentMax = axis === 'y' ? bounds.maxY : bounds.maxX;
+    const viewSize = axis === 'y' ? this.canvas.clientHeight : this.canvas.clientWidth;
+
+    // Set pan so that the clicked ratio maps to the center of the viewport
+    const targetContent = contentMin + ratio * (contentMax - contentMin);
+    if (axis === 'y') {
+      this.transform.y = -targetContent * scale + viewSize / 2;
+    } else {
+      this.transform.x = -targetContent * scale + viewSize / 2;
+    }
+  }
+
+  _updateScrollbars() {
+    if (!this._thumbV || !this._thumbH) return;
+
+    const bounds = this._getContentBounds();
+    const scale = this.transform.scale;
+    const viewW = this.canvas.clientWidth;
+    const viewH = this.canvas.clientHeight;
+
+    // Content range in screen pixels
+    const contentW = (bounds.maxX - bounds.minX) * scale;
+    const contentH = (bounds.maxY - bounds.minY) * scale;
+
+    // Viewport position within content (in screen pixels)
+    const viewLeft = -(this.transform.x + bounds.minX * scale);
+    const viewTop = -(this.transform.y + bounds.minY * scale);
+
+    // Vertical scrollbar
+    const totalH = Math.max(contentH, viewH);
+    const thumbHRatio = Math.min(1, viewH / totalH);
+    const thumbTopRatio = viewTop / totalH;
+    const trackH = this._scrollbarV.clientHeight;
+    this._thumbV.style.height = `${Math.max(30, thumbHRatio * trackH)}px`;
+    this._thumbV.style.transform = `translateY(${Math.max(0, Math.min(trackH - 30, thumbTopRatio * trackH))}px)`;
+
+    // Horizontal scrollbar
+    const totalW = Math.max(contentW, viewW);
+    const thumbWRatio = Math.min(1, viewW / totalW);
+    const thumbLeftRatio = viewLeft / totalW;
+    const trackW = this._scrollbarH.clientWidth;
+    this._thumbH.style.width = `${Math.max(30, thumbWRatio * trackW)}px`;
+    this._thumbH.style.transform = `translateX(${Math.max(0, Math.min(trackW - 30, thumbLeftRatio * trackW))}px)`;
+
+    // Hide scrollbars when everything fits
+    this._scrollbarV.style.visibility = thumbHRatio >= 0.99 ? 'hidden' : 'visible';
+    this._scrollbarH.style.visibility = thumbWRatio >= 0.99 ? 'hidden' : 'visible';
+  }
+
   // --- Rendering ---
 
   _startRenderLoop() {
@@ -249,6 +416,9 @@ export class DrawingEngine {
 
     // Draw remote cursors
     this._drawRemoteCursors();
+
+    // Update scrollbar positions
+    this._updateScrollbars();
   }
 
   _drawStroke(stroke) {
