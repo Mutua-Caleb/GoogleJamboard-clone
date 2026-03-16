@@ -379,6 +379,12 @@ io.on('connection', (socket) => {
     socket.to(currentRoom).emit('cursor-move', { ...data, userId: socket.id });
   });
 
+  // Viewport tracking (scroll/pan/zoom)
+  socket.on('viewport-change', (data) => {
+    if (!currentRoom) return;
+    socket.to(currentRoom).emit('viewport-change', { ...data, userId: socket.id });
+  });
+
   // PDF events
   socket.on('load-pdf', (data) => {
     if (!currentRoom) return;

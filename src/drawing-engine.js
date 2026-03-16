@@ -4,10 +4,10 @@
  */
 
 export class DrawingEngine {
-  constructor(canvas, { onStrokeStart, onStrokeMove, onStrokeEnd, onErase, onCursorMove }) {
+  constructor(canvas, { onStrokeStart, onStrokeMove, onStrokeEnd, onErase, onCursorMove, onViewportChange }) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.callbacks = { onStrokeStart, onStrokeMove, onStrokeEnd, onErase, onCursorMove };
+    this.callbacks = { onStrokeStart, onStrokeMove, onStrokeEnd, onErase, onCursorMove, onViewportChange };
 
     // State
     this.isDrawing = false;
@@ -29,6 +29,9 @@ export class DrawingEngine {
 
     // Remote cursors
     this.remoteCursors = new Map();
+
+    // Remote viewports (other users' visible area)
+    this.remoteViewports = new Map();
 
     // Offscreen canvas for pencil texture
     this.pencilPattern = this._createPencilPattern();
@@ -137,6 +140,7 @@ export class DrawingEngine {
     if (this.isPanning) {
       this.transform.x = e.clientX - this.panStart.x;
       this.transform.y = e.clientY - this.panStart.y;
+      this._notifyViewportChange();
       return;
     }
 
@@ -189,6 +193,7 @@ export class DrawingEngine {
     this.transform.x = mx - ratio * (mx - this.transform.x);
     this.transform.y = my - ratio * (my - this.transform.y);
     this.transform.scale = newScale;
+    this._notifyViewportChange();
   }
 
   _handleErase(point) {
@@ -210,6 +215,84 @@ export class DrawingEngine {
       this.strokes = this.strokes.filter((s) => !toErase.includes(s.id));
       this.callbacks.onErase?.({ strokeIds: toErase, layer: this.layer });
     }
+  }
+
+  // --- Viewport sharing ---
+
+  _getViewportRect() {
+    const viewW = this.canvas.clientWidth;
+    const viewH = this.canvas.clientHeight;
+    return {
+      x: -this.transform.x / this.transform.scale,
+      y: -this.transform.y / this.transform.scale,
+      width: viewW / this.transform.scale,
+      height: viewH / this.transform.scale,
+    };
+  }
+
+  _notifyViewportChange() {
+    if (this._viewportThrottle) return;
+    this._viewportThrottle = true;
+    setTimeout(() => {
+      this._viewportThrottle = false;
+      this.callbacks.onViewportChange?.(this._getViewportRect());
+    }, 50);
+  }
+
+  updateRemoteViewport(userId, { x, y, width, height, name, color }) {
+    this.remoteViewports.set(userId, { x, y, width, height, name, color, timestamp: Date.now() });
+  }
+
+  removeRemoteViewport(userId) {
+    this.remoteViewports.delete(userId);
+  }
+
+  _drawRemoteViewports() {
+    const { ctx } = this;
+    const now = Date.now();
+
+    this.remoteViewports.forEach((vp, userId) => {
+      // Fade out after 4 seconds of no updates
+      const age = now - vp.timestamp;
+      if (age > 6000) {
+        this.remoteViewports.delete(userId);
+        return;
+      }
+      const fadeAlpha = age > 4000 ? 1 - (age - 4000) / 2000 : 1;
+
+      ctx.save();
+      ctx.globalAlpha = 0.5 * fadeAlpha;
+
+      // Draw viewport rectangle outline
+      ctx.strokeStyle = vp.color;
+      ctx.lineWidth = 2 / this.transform.scale;
+      ctx.setLineDash([6 / this.transform.scale, 4 / this.transform.scale]);
+      ctx.strokeRect(vp.x, vp.y, vp.width, vp.height);
+      ctx.setLineDash([]);
+
+      // Draw label at top-left of viewport
+      const fontSize = Math.max(12, 14 / this.transform.scale);
+      ctx.font = `${fontSize}px Inter, system-ui, sans-serif`;
+      const label = vp.name || 'User';
+      const metrics = ctx.measureText(label);
+      const padding = 4 / this.transform.scale;
+      const labelH = fontSize + padding * 2;
+      const labelW = metrics.width + padding * 2;
+
+      // Label background
+      ctx.globalAlpha = 0.7 * fadeAlpha;
+      ctx.fillStyle = vp.color;
+      ctx.beginPath();
+      ctx.roundRect(vp.x, vp.y - labelH, labelW, labelH, 3 / this.transform.scale);
+      ctx.fill();
+
+      // Label text
+      ctx.globalAlpha = fadeAlpha;
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(label, vp.x + padding, vp.y - padding);
+
+      ctx.restore();
+    });
   }
 
   // --- Scrollbars ---
@@ -301,6 +384,7 @@ export class DrawingEngine {
       } else {
         this.transform.x = startTransform + panDelta;
       }
+      this._notifyViewportChange();
     });
 
     const stopDrag = () => {
@@ -333,6 +417,7 @@ export class DrawingEngine {
     } else {
       this.transform.x = -targetContent * scale + viewSize / 2;
     }
+    this._notifyViewportChange();
   }
 
   _updateScrollbars() {
@@ -413,6 +498,9 @@ export class DrawingEngine {
     if (this.currentStroke && this.tool !== 'eraser') {
       this._drawStroke(this.currentStroke);
     }
+
+    // Draw remote viewports
+    this._drawRemoteViewports();
 
     // Draw remote cursors
     this._drawRemoteCursors();

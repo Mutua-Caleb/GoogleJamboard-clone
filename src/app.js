@@ -136,6 +136,23 @@ class CollabBoardApp {
       }
     });
 
+    this.collab.on('viewport-change', (data) => {
+      const room = this._currentRoomInfo;
+      if (room) {
+        const user = room.users.find((u) => u.id === data.userId);
+        if (user) {
+          this.engine?.updateRemoteViewport(data.userId, {
+            x: data.x,
+            y: data.y,
+            width: data.width,
+            height: data.height,
+            name: user.name,
+            color: user.color,
+          });
+        }
+      }
+    });
+
     this.collab.on('user-joined', (data) => {
       this._currentRoomInfo = data.room;
       this._updateUserList();
@@ -145,6 +162,7 @@ class CollabBoardApp {
     this.collab.on('user-left', (data) => {
       this._currentRoomInfo = data.room;
       this.engine?.removeRemoteCursor(data.id);
+      this.engine?.removeRemoteViewport(data.id);
       this._updateUserList();
       this._showToast('A user left the board');
     });
@@ -264,10 +282,17 @@ class CollabBoardApp {
       onStrokeEnd: (data) => this.collab.sendStrokeEnd(data),
       onErase: (data) => this.collab.sendErase(data),
       onCursorMove: (data) => this.collab.sendCursorMove(data),
+      onViewportChange: (data) => this.collab.sendViewportChange(data),
     });
 
     this._selectTool('pen');
     this._selectColor('#FFFFFF');
+
+    // Send initial viewport so other users can see where we are
+    setTimeout(() => {
+      const vp = this.engine?._getViewportRect();
+      if (vp) this.collab.sendViewportChange(vp);
+    }, 100);
 
     // Auto-save thumbnail every 30s
     this._thumbnailInterval = setInterval(() => this._saveThumbnail(), 30000);
