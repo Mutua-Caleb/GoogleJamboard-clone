@@ -220,6 +220,24 @@
         <input type="file" id="pdf-file-input" accept="application/pdf" class="hidden" />
       </div>
 
+      <div class="toolbar-section">
+        <span class="toolbar-label">Media</span>
+        <button id="btn-upload-image" class="tool-btn" title="Add Image (paste or upload)">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+          </svg>
+        </button>
+        <input type="file" id="image-file-input" accept="image/*" class="hidden" />
+        <button id="btn-add-youtube" class="tool-btn" title="Add YouTube Video">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19.13C5.12 19.56 12 19.56 12 19.56s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.43z"/>
+            <polygon points="9.75 15.02 15.5 11.75 9.75 8.48 9.75 15.02"/>
+          </svg>
+        </button>
+      </div>
+
       <div id="pdf-controls" class="toolbar-section hidden">
         <button id="btn-pdf-prev" class="tool-btn" title="Previous page">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

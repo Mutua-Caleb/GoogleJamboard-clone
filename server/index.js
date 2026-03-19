@@ -81,6 +81,7 @@ function roomToJam(room, title) {
     createdAt: room.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     strokes: room.strokes,
+    media: room.media || [],
     pdfUrl: room.pdfUrl,
     pdfPage: room.pdfPage,
     pages: pagesObj,
@@ -125,6 +126,15 @@ const upload = multer({
   limits: { fileSize: 30 * 1024 * 1024 }, // 30MB
 });
 
+const imageUpload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed'));
+  },
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+});
+
 // Serve static files in production
 const distPath = path.join(__dirname, '..', 'dist');
 if (fs.existsSync(distPath)) {
@@ -138,6 +148,16 @@ app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 // PDF upload
 app.post('/api/upload-pdf', upload.single('pdf'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  res.json({
+    filename: req.file.filename,
+    originalname: req.file.originalname,
+    url: `/uploads/${req.file.filename}`,
+  });
+});
+
+// Image upload
+app.post('/api/upload-image', imageUpload.single('image'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   res.json({
     filename: req.file.filename,
@@ -196,6 +216,7 @@ function createRoom(hostId, hostName) {
     host: hostId,
     users: new Map(),
     strokes: [],
+    media: [],  // images & youtube embeds
     pdfUrl: null,
     pdfPage: 1,
     pages: new Map(),
@@ -226,6 +247,7 @@ function createRoomFromJam(hostId, jam) {
     host: hostId,
     users: new Map(),
     strokes: jam.strokes || [],
+    media: jam.media || [],
     pdfUrl: jam.pdfUrl || null,
     pdfPage: jam.pdfPage || 1,
     pages: pagesMap,
@@ -289,6 +311,7 @@ io.on('connection', (socket) => {
       color: userColor,
       room: getRoomInfo(room),
       strokes: room.strokes,
+      media: room.media || [],
       pdfStrokes: room.pdfUrl ? (room.pages.get(room.pdfPage) || []) : [],
     });
   });
@@ -311,6 +334,7 @@ io.on('connection', (socket) => {
       color: userColor,
       room: getRoomInfo(room),
       strokes: room.strokes,
+      media: room.media || [],
       pdfStrokes: room.pdfUrl ? (room.pages.get(room.pdfPage) || []) : [],
     });
 
@@ -370,6 +394,25 @@ io.on('connection', (socket) => {
     }
 
     socket.to(currentRoom).emit('erase', data);
+    scheduleAutoSave(currentRoom);
+  });
+
+  // Media (images & YouTube)
+  socket.on('add-media', (data) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    room.media.push(data);
+    socket.to(currentRoom).emit('add-media', data);
+    scheduleAutoSave(currentRoom);
+  });
+
+  socket.on('remove-media', (data) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    room.media = room.media.filter((m) => m.id !== data.id);
+    socket.to(currentRoom).emit('remove-media', data);
     scheduleAutoSave(currentRoom);
   });
 

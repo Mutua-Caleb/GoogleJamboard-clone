@@ -17,6 +17,7 @@ class CollabBoardApp {
 
     this._initUI();
     this._setupCollaboration();
+    this._tryAutoRejoin();
   }
 
   _initUI() {
@@ -26,6 +27,10 @@ class CollabBoardApp {
     this.notebookEl = document.getElementById('notebook');
     this.nameInput = document.getElementById('name-input');
     this.roomIdInput = document.getElementById('room-id-input');
+
+    // Pre-fill name from previous session
+    const savedName = this._getSavedName();
+    if (savedName) this.nameInput.value = savedName;
 
     // Lobby buttons
     document.getElementById('btn-create').addEventListener('click', () => this._createRoom());
@@ -74,6 +79,18 @@ class CollabBoardApp {
     document.getElementById('btn-pdf-prev').addEventListener('click', () => this.pdfViewer?.prevPage());
     document.getElementById('btn-pdf-next').addEventListener('click', () => this.pdfViewer?.nextPage());
     document.getElementById('btn-close-pdf').addEventListener('click', () => this._closePDF());
+
+    // Image upload
+    document.getElementById('btn-upload-image').addEventListener('click', () => {
+      document.getElementById('image-file-input').click();
+    });
+    document.getElementById('image-file-input').addEventListener('change', (e) => this._uploadImage(e));
+
+    // YouTube embed
+    document.getElementById('btn-add-youtube').addEventListener('click', () => this._promptYouTubeUrl());
+
+    // Paste handler for images
+    document.addEventListener('paste', (e) => this._handlePaste(e));
 
     // Copy room code
     document.getElementById('btn-copy-room').addEventListener('click', () => this._copyRoomCode());
@@ -153,6 +170,15 @@ class CollabBoardApp {
       }
     });
 
+    this.collab.on('add-media', (data) => {
+      this.engine?.addMedia(data);
+      if (data.type === 'youtube') this._createYouTubeOverlay(data);
+    });
+    this.collab.on('remove-media', (data) => {
+      this.engine?.removeMedia(data.id);
+      this._removeYouTubeOverlay(data.id);
+    });
+
     this.collab.on('user-joined', (data) => {
       this._currentRoomInfo = data.room;
       this._updateUserList();
@@ -220,6 +246,9 @@ class CollabBoardApp {
       if (response.strokes?.length) {
         this.engine.setStrokes(response.strokes);
       }
+      if (response.media?.length) {
+        this._loadMedia(response.media);
+      }
       if (response.room.pdfUrl) {
         await this._loadPDFFromUrl(response.room.pdfUrl);
         if (response.pdfStrokes?.length) {
@@ -252,6 +281,9 @@ class CollabBoardApp {
 
       if (response.strokes?.length) {
         this.engine.setStrokes(response.strokes);
+      }
+      if (response.media?.length) {
+        this._loadMedia(response.media);
       }
       if (response.room.pdfUrl) {
         await this._loadPDFFromUrl(response.room.pdfUrl);
@@ -287,6 +319,9 @@ class CollabBoardApp {
 
     this._selectTool('pen');
     this._selectColor('#FFFFFF');
+
+    // Save session for auto-rejoin
+    this._saveSession();
 
     // Send initial viewport so other users can see where we are
     setTimeout(() => {
@@ -398,9 +433,239 @@ class CollabBoardApp {
     }
   }
 
+  // ============================
+  // Image & YouTube media
+  // ============================
+
+  async _handlePaste(e) {
+    if (!this.inRoom) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        await this._uploadImageFile(file);
+        return;
+      }
+    }
+  }
+
+  async _uploadImage(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    await this._uploadImageFile(file);
+    e.target.value = '';
+  }
+
+  async _uploadImageFile(file) {
+    const formData = new FormData();
+    formData.append('image', file);
+
+    try {
+      this._showToast('Uploading image...');
+      const res = await fetch('/api/upload-image', { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (data.url) {
+        // Get image dimensions to size it on canvas
+        const img = new Image();
+        img.src = data.url;
+        await new Promise((resolve) => { img.onload = resolve; img.onerror = resolve; });
+
+        const maxSize = 400;
+        let width = img.naturalWidth || 400;
+        let height = img.naturalHeight || 300;
+        if (width > maxSize || height > maxSize) {
+          const ratio = Math.min(maxSize / width, maxSize / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+
+        // Place at center of current viewport
+        const vp = this.engine?._getViewportRect();
+        const x = vp ? vp.x + (vp.width - width) / 2 : 100;
+        const y = vp ? vp.y + (vp.height - height) / 2 : 100;
+
+        const mediaItem = {
+          id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          type: 'image',
+          url: data.url,
+          x, y, width, height,
+        };
+
+        this.engine?.addMedia(mediaItem);
+        this.collab.sendAddMedia(mediaItem);
+        this._showToast('Image added');
+      }
+    } catch {
+      this._showToast('Failed to upload image', 'error');
+    }
+  }
+
+  _promptYouTubeUrl() {
+    // Create a simple modal for YouTube URL input
+    const existing = document.getElementById('youtube-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'youtube-modal';
+    modal.className = 'youtube-modal';
+    modal.innerHTML = `
+      <div class="youtube-modal-content">
+        <h3>Add YouTube Video</h3>
+        <input type="text" id="youtube-url-input" placeholder="Paste YouTube URL here..." autocomplete="off" />
+        <div class="youtube-modal-actions">
+          <button id="youtube-modal-cancel" class="btn btn-secondary btn-sm">Cancel</button>
+          <button id="youtube-modal-add" class="btn btn-primary btn-sm">Add Video</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const input = document.getElementById('youtube-url-input');
+    input.focus();
+
+    const close = () => modal.remove();
+
+    document.getElementById('youtube-modal-cancel').addEventListener('click', close);
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+    const addVideo = () => {
+      const url = input.value.trim();
+      const videoId = this._extractYouTubeId(url);
+      if (!videoId) {
+        this._showToast('Invalid YouTube URL', 'error');
+        return;
+      }
+      close();
+      this._addYouTubeEmbed(videoId);
+    };
+
+    document.getElementById('youtube-modal-add').addEventListener('click', addVideo);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') addVideo();
+      if (e.key === 'Escape') close();
+    });
+  }
+
+  _extractYouTubeId(url) {
+    const patterns = [
+      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+      /^([a-zA-Z0-9_-]{11})$/,
+    ];
+    for (const p of patterns) {
+      const match = url.match(p);
+      if (match) return match[1];
+    }
+    return null;
+  }
+
+  _addYouTubeEmbed(videoId) {
+    const vp = this.engine?._getViewportRect();
+    const width = 480;
+    const height = 270;
+    const x = vp ? vp.x + (vp.width - width) / 2 : 100;
+    const y = vp ? vp.y + (vp.height - height) / 2 : 100;
+
+    const mediaItem = {
+      id: `yt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      type: 'youtube',
+      videoId,
+      x, y, width, height,
+    };
+
+    this.engine?.addMedia(mediaItem);
+    this._createYouTubeOverlay(mediaItem);
+    this.collab.sendAddMedia(mediaItem);
+    this._showToast('YouTube video added');
+  }
+
+  _createYouTubeOverlay(item) {
+    if (item.type !== 'youtube') return;
+    const container = document.getElementById('canvas-area');
+
+    const wrapper = document.createElement('div');
+    wrapper.id = `yt-overlay-${item.id}`;
+    wrapper.className = 'youtube-overlay';
+    wrapper.dataset.mediaId = item.id;
+    wrapper.dataset.cx = item.x;
+    wrapper.dataset.cy = item.y;
+    wrapper.dataset.cw = item.width;
+    wrapper.dataset.ch = item.height;
+
+    wrapper.innerHTML = `
+      <div class="youtube-overlay-header">
+        <span>YouTube</span>
+        <button class="youtube-close-btn" title="Remove video">&times;</button>
+      </div>
+      <iframe
+        src="https://www.youtube.com/embed/${item.videoId}?rel=0"
+        frameborder="0"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowfullscreen
+        style="width:100%;height:calc(100% - 28px);border-radius:0 0 6px 6px;"
+      ></iframe>
+    `;
+
+    container.appendChild(wrapper);
+
+    // Close button
+    wrapper.querySelector('.youtube-close-btn').addEventListener('click', () => {
+      this.engine?.removeMedia(item.id);
+      this._removeYouTubeOverlay(item.id);
+      this.collab.sendRemoveMedia({ id: item.id });
+    });
+
+    // Update position based on transform
+    this._updateYouTubeOverlays();
+
+    // Keep updating via render loop reference
+    if (!this._ytUpdateInterval) {
+      this._ytUpdateInterval = setInterval(() => this._updateYouTubeOverlays(), 50);
+    }
+  }
+
+  _removeYouTubeOverlay(id) {
+    const el = document.getElementById(`yt-overlay-${id}`);
+    if (el) el.remove();
+  }
+
+  _updateYouTubeOverlays() {
+    if (!this.engine) return;
+    const t = this.engine.transform;
+    document.querySelectorAll('.youtube-overlay').forEach((el) => {
+      const cx = parseFloat(el.dataset.cx);
+      const cy = parseFloat(el.dataset.cy);
+      const cw = parseFloat(el.dataset.cw);
+      const ch = parseFloat(el.dataset.ch);
+      const sx = cx * t.scale + t.x;
+      const sy = cy * t.scale + t.y;
+      const sw = cw * t.scale;
+      const sh = ch * t.scale;
+      el.style.left = `${sx}px`;
+      el.style.top = `${sy}px`;
+      el.style.width = `${sw}px`;
+      el.style.height = `${sh}px`;
+    });
+  }
+
+  _loadMedia(items) {
+    this.engine?.setMedia(items);
+    for (const item of items) {
+      if (item.type === 'youtube') {
+        this._createYouTubeOverlay(item);
+      }
+    }
+  }
+
   _leaveRoom() {
     this._saveThumbnail();
+    this._clearSession();
     if (this._thumbnailInterval) clearInterval(this._thumbnailInterval);
+    if (this._ytUpdateInterval) { clearInterval(this._ytUpdateInterval); this._ytUpdateInterval = null; }
+    document.querySelectorAll('.youtube-overlay').forEach((el) => el.remove());
 
     this.collab.disconnect();
     this.inRoom = false;
@@ -725,6 +990,50 @@ class CollabBoardApp {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  // Session persistence
+  _saveSession() {
+    try {
+      localStorage.setItem('collabboard-session', JSON.stringify({
+        jamId: this.currentJamId,
+        roomId: this.collab.roomId,
+        name: this.collab.userName,
+        timestamp: Date.now(),
+      }));
+    } catch {}
+  }
+
+  _clearSession() {
+    try { localStorage.removeItem('collabboard-session'); } catch {}
+  }
+
+  _getSavedSession() {
+    try {
+      const raw = localStorage.getItem('collabboard-session');
+      if (!raw) return null;
+      const session = JSON.parse(raw);
+      // Sessions older than 7 days are stale
+      if (Date.now() - session.timestamp > 7 * 24 * 60 * 60 * 1000) {
+        this._clearSession();
+        return null;
+      }
+      return session;
+    } catch { return null; }
+  }
+
+  async _tryAutoRejoin() {
+    const session = this._getSavedSession();
+    if (!session || !session.jamId || !session.name) return;
+
+    // Wait for socket connection
+    await new Promise((resolve) => {
+      if (this.collab.socket?.connected) return resolve();
+      this.collab.on('connected', resolve);
+    });
+
+    this.nameInput.value = session.name;
+    await this._createRoom(session.jamId);
   }
 
   // Remember name across sessions

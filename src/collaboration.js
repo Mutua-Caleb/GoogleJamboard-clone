@@ -33,7 +33,8 @@ export class CollaborationManager {
     // Relay all real-time events
     const events = [
       'stroke-start', 'stroke-move', 'stroke-end', 'erase',
-      'cursor-move', 'viewport-change', 'user-joined', 'user-left',
+      'cursor-move', 'viewport-change', 'add-media', 'remove-media',
+      'user-joined', 'user-left',
       'load-pdf', 'pdf-page-change', 'clear-board', 'sync-strokes',
       'jam-renamed',
     ];
@@ -92,6 +93,14 @@ export class CollaborationManager {
 
   sendViewportChange(data) {
     this.socket?.emit('viewport-change', data);
+  }
+
+  sendAddMedia(data) {
+    this.socket?.emit('add-media', data);
+  }
+
+  sendRemoveMedia(data) {
+    this.socket?.emit('remove-media', data);
   }
 
   sendLoadPDF(data) {

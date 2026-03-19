@@ -674,6 +674,100 @@ body {
 }
 
 /* ============================
+   YouTube Modal
+   ============================ */
+
+.youtube-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.youtube-modal-content {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  width: 420px;
+  max-width: 90vw;
+}
+
+.youtube-modal-content h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.youtube-modal-content input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.youtube-modal-content input:focus {
+  border-color: var(--accent);
+}
+
+.youtube-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+/* ============================
+   YouTube Overlay
+   ============================ */
+
+.youtube-overlay {
+  position: absolute;
+  z-index: 15;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  pointer-events: auto;
+}
+
+.youtube-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #1a1a2e;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  height: 28px;
+  box-sizing: border-box;
+}
+
+.youtube-close-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.youtube-close-btn:hover {
+  color: var(--danger);
+}
+
+/* ============================
    Notebook (My Jams)
    ============================ */
 

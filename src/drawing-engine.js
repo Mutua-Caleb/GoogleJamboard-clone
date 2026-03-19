@@ -22,6 +22,10 @@ export class DrawingEngine {
     this.strokes = [];
     this.strokeIdCounter = 0;
 
+    // Media items (images rendered on canvas)
+    this.mediaItems = [];
+    this._imageCache = new Map();
+
     // Pan & zoom
     this.transform = { x: 0, y: 0, scale: 1 };
     this.isPanning = false;
@@ -489,6 +493,9 @@ export class DrawingEngine {
       this.transform.y * dpr
     );
 
+    // Draw media items (images) under strokes so annotations appear on top
+    this._drawMediaItems();
+
     // Draw all completed strokes
     for (const stroke of this.strokes) {
       this._drawStroke(stroke);
@@ -693,6 +700,50 @@ export class DrawingEngine {
 
   removeStrokes(strokeIds) {
     this.strokes = this.strokes.filter((s) => !strokeIds.includes(s.id));
+  }
+
+  // Media management
+  addMedia(item) {
+    this.mediaItems.push(item);
+    if (item.type === 'image') {
+      this._loadImage(item.url);
+    }
+  }
+
+  removeMedia(id) {
+    this.mediaItems = this.mediaItems.filter((m) => m.id !== id);
+  }
+
+  setMedia(items) {
+    this.mediaItems = items;
+    for (const item of items) {
+      if (item.type === 'image') {
+        this._loadImage(item.url);
+      }
+    }
+  }
+
+  _loadImage(url) {
+    if (this._imageCache.has(url)) return;
+    const img = new Image();
+    img.src = url;
+    this._imageCache.set(url, img);
+  }
+
+  _drawMediaItems() {
+    const { ctx } = this;
+    for (const item of this.mediaItems) {
+      if (item.type === 'image') {
+        const img = this._imageCache.get(item.url);
+        if (img && img.complete && img.naturalWidth) {
+          ctx.save();
+          ctx.globalAlpha = 1;
+          ctx.drawImage(img, item.x, item.y, item.width, item.height);
+          ctx.restore();
+        }
+      }
+      // YouTube items are rendered as DOM overlays, not on canvas
+    }
   }
 
   clearStrokes() {
