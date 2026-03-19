@@ -416,6 +416,21 @@ io.on('connection', (socket) => {
     scheduleAutoSave(currentRoom);
   });
 
+  socket.on('move-media', (data) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    const item = room.media.find((m) => m.id === data.id);
+    if (item) {
+      item.x = data.x;
+      item.y = data.y;
+      item.width = data.width;
+      item.height = data.height;
+    }
+    socket.to(currentRoom).emit('move-media', data);
+    scheduleAutoSave(currentRoom);
+  });
+
   // Cursor tracking
   socket.on('cursor-move', (data) => {
     if (!currentRoom) return;
@@ -436,6 +451,16 @@ io.on('connection', (socket) => {
     room.pdfUrl = data.url;
     room.pdfPage = 1;
     socket.to(currentRoom).emit('load-pdf', data);
+    scheduleAutoSave(currentRoom);
+  });
+
+  socket.on('close-pdf', () => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    room.pdfUrl = null;
+    room.pdfPage = 1;
+    socket.to(currentRoom).emit('close-pdf');
     scheduleAutoSave(currentRoom);
   });
 

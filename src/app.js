@@ -178,6 +178,9 @@ class CollabBoardApp {
       this.engine?.removeMedia(data.id);
       this._removeYouTubeOverlay(data.id);
     });
+    this.collab.on('move-media', (data) => {
+      this._handleRemoteMediaMove(data);
+    });
 
     this.collab.on('user-joined', (data) => {
       this._currentRoomInfo = data.room;
@@ -195,6 +198,11 @@ class CollabBoardApp {
 
     this.collab.on('load-pdf', (data) => {
       this._loadPDFFromUrl(data.url);
+    });
+
+    this.collab.on('close-pdf', () => {
+      this._closePDF(true);
+      this._showToast('PDF was closed');
     });
 
     this.collab.on('pdf-page-change', (data) => {
@@ -418,7 +426,7 @@ class CollabBoardApp {
     this._showToast('PDF loaded');
   }
 
-  _closePDF() {
+  _closePDF(remote = false) {
     this.pdfMode = false;
     this.engine?.setLayer('whiteboard');
     this.engine?.clearStrokes();
@@ -430,6 +438,10 @@ class CollabBoardApp {
     if (this.pdfViewer) {
       this.pdfViewer.destroy();
       this.pdfViewer = null;
+    }
+
+    if (!remote) {
+      this.collab.sendClosePDF();
     }
   }
 
@@ -584,6 +596,8 @@ class CollabBoardApp {
 
   _createYouTubeOverlay(item) {
     if (item.type !== 'youtube') return;
+    // Prevent duplicate overlays
+    if (document.getElementById(`yt-overlay-${item.id}`)) return;
     const container = document.getElementById('canvas-area');
 
     const wrapper = document.createElement('div');
@@ -607,6 +621,7 @@ class CollabBoardApp {
         allowfullscreen
         style="width:100%;height:calc(100% - 28px);border-radius:0 0 6px 6px;"
       ></iframe>
+      <div class="youtube-resize-handle"></div>
     `;
 
     container.appendChild(wrapper);
@@ -618,12 +633,132 @@ class CollabBoardApp {
       this.collab.sendRemoveMedia({ id: item.id });
     });
 
+    // Drag by header
+    this._setupYouTubeDrag(wrapper);
+    // Resize by corner handle
+    this._setupYouTubeResize(wrapper);
+
     // Update position based on transform
     this._updateYouTubeOverlays();
 
     // Keep updating via render loop reference
     if (!this._ytUpdateInterval) {
       this._ytUpdateInterval = setInterval(() => this._updateYouTubeOverlays(), 50);
+    }
+  }
+
+  _setupYouTubeDrag(wrapper) {
+    const header = wrapper.querySelector('.youtube-overlay-header');
+    let dragging = false;
+    let startX, startY, origCx, origCy;
+
+    header.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.youtube-close-btn')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragging = true;
+      header.setPointerCapture(e.pointerId);
+      wrapper.classList.add('dragging');
+
+      const t = this.engine.transform;
+      startX = e.clientX;
+      startY = e.clientY;
+      origCx = parseFloat(wrapper.dataset.cx);
+      origCy = parseFloat(wrapper.dataset.cy);
+    });
+
+    header.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      e.preventDefault();
+      const t = this.engine.transform;
+      const dx = (e.clientX - startX) / t.scale;
+      const dy = (e.clientY - startY) / t.scale;
+      wrapper.dataset.cx = origCx + dx;
+      wrapper.dataset.cy = origCy + dy;
+    });
+
+    const stopDrag = () => {
+      if (!dragging) return;
+      dragging = false;
+      wrapper.classList.remove('dragging');
+      this._syncMediaPosition(wrapper);
+    };
+    header.addEventListener('pointerup', stopDrag);
+    header.addEventListener('pointercancel', stopDrag);
+  }
+
+  _setupYouTubeResize(wrapper) {
+    const handle = wrapper.querySelector('.youtube-resize-handle');
+    let resizing = false;
+    let startX, startY, origCw, origCh;
+
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      resizing = true;
+      handle.setPointerCapture(e.pointerId);
+      wrapper.classList.add('resizing');
+
+      const t = this.engine.transform;
+      startX = e.clientX;
+      startY = e.clientY;
+      origCw = parseFloat(wrapper.dataset.cw);
+      origCh = parseFloat(wrapper.dataset.ch);
+    });
+
+    handle.addEventListener('pointermove', (e) => {
+      if (!resizing) return;
+      e.preventDefault();
+      const t = this.engine.transform;
+      const dw = (e.clientX - startX) / t.scale;
+      const dh = (e.clientY - startY) / t.scale;
+      wrapper.dataset.cw = Math.max(200, origCw + dw);
+      wrapper.dataset.ch = Math.max(120, origCh + dh);
+    });
+
+    const stopResize = () => {
+      if (!resizing) return;
+      resizing = false;
+      wrapper.classList.remove('resizing');
+      this._syncMediaPosition(wrapper);
+    };
+    handle.addEventListener('pointerup', stopResize);
+    handle.addEventListener('pointercancel', stopResize);
+  }
+
+  _syncMediaPosition(wrapper) {
+    const id = wrapper.dataset.mediaId;
+    const x = parseFloat(wrapper.dataset.cx);
+    const y = parseFloat(wrapper.dataset.cy);
+    const width = parseFloat(wrapper.dataset.cw);
+    const height = parseFloat(wrapper.dataset.ch);
+
+    // Update local engine media item
+    const item = this.engine?.mediaItems.find((m) => m.id === id);
+    if (item) {
+      item.x = x; item.y = y;
+      item.width = width; item.height = height;
+    }
+
+    // Broadcast to collaborators
+    this.collab.sendMoveMedia({ id, x, y, width, height });
+  }
+
+  _handleRemoteMediaMove(data) {
+    // Update engine media item
+    const item = this.engine?.mediaItems.find((m) => m.id === data.id);
+    if (item) {
+      item.x = data.x; item.y = data.y;
+      item.width = data.width; item.height = data.height;
+    }
+
+    // Update YouTube overlay if it exists
+    const el = document.getElementById(`yt-overlay-${data.id}`);
+    if (el) {
+      el.dataset.cx = data.x;
+      el.dataset.cy = data.y;
+      el.dataset.cw = data.width;
+      el.dataset.ch = data.height;
     }
   }
 
