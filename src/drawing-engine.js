@@ -4,10 +4,10 @@
  */
 
 export class DrawingEngine {
-  constructor(canvas, { onStrokeStart, onStrokeMove, onStrokeEnd, onErase, onCursorMove, onViewportChange }) {
+  constructor(canvas, { onStrokeStart, onStrokeMove, onStrokeEnd, onErase, onCursorMove, onViewportChange, onAddText, onRemoveText, onUpdateText }) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.callbacks = { onStrokeStart, onStrokeMove, onStrokeEnd, onErase, onCursorMove, onViewportChange };
+    this.callbacks = { onStrokeStart, onStrokeMove, onStrokeEnd, onErase, onCursorMove, onViewportChange, onAddText, onRemoveText, onUpdateText };
 
     // State
     this.isDrawing = false;
@@ -25,6 +25,9 @@ export class DrawingEngine {
     // Media items (images rendered on canvas)
     this.mediaItems = [];
     this._imageCache = new Map();
+
+    // Text items rendered on canvas
+    this.textItems = [];
 
     // Pan & zoom
     this.transform = { x: 0, y: 0, scale: 1 };
@@ -105,6 +108,13 @@ export class DrawingEngine {
     if (e.button !== 0) return;
 
     const point = this._getCanvasPoint(e);
+
+    // Text tool: open text input at click position
+    if (this.tool === 'text') {
+      this._openTextInput(point, e);
+      return;
+    }
+
     const pressure = e.pressure !== undefined && e.pressure > 0 ? e.pressure : 0.5;
 
     this.isDrawing = true;
@@ -329,6 +339,16 @@ export class DrawingEngine {
       }
     }
 
+    for (const item of this.textItems) {
+      if (item.x < minX) minX = item.x;
+      if (item.y < minY) minY = item.y;
+      const lines = item.text.split('\n');
+      const estWidth = item.fontSize * lines.reduce((max, l) => Math.max(max, l.length), 0) * 0.6;
+      const estHeight = item.fontSize * 1.2 * lines.length;
+      if (item.x + estWidth > maxX) maxX = item.x + estWidth;
+      if (item.y + estHeight > maxY) maxY = item.y + estHeight;
+    }
+
     return {
       minX: minX - PADDING,
       minY: minY - PADDING,
@@ -512,6 +532,9 @@ export class DrawingEngine {
       this._drawStroke(this.currentStroke);
     }
 
+    // Draw text items
+    this._drawTextItems();
+
     // Draw remote viewports
     this._drawRemoteViewports();
 
@@ -678,6 +701,101 @@ export class DrawingEngine {
     });
   }
 
+  // --- Text tool ---
+
+  _openTextInput(point, e) {
+    // Close any existing text input
+    this._closeTextInput();
+
+    const rect = this.canvas.getBoundingClientRect();
+    const screenX = point.x * this.transform.scale + this.transform.x + rect.left;
+    const screenY = point.y * this.transform.scale + this.transform.y + rect.top;
+    const fontSize = Math.max(14, this.size * 4);
+
+    const input = document.createElement('textarea');
+    input.className = 'canvas-text-input';
+    input.style.left = `${screenX}px`;
+    input.style.top = `${screenY}px`;
+    input.style.fontSize = `${fontSize * this.transform.scale}px`;
+    input.style.color = this.color;
+    input.style.fontFamily = 'Inter, system-ui, sans-serif';
+    input.style.minWidth = '60px';
+    input.style.minHeight = `${fontSize * this.transform.scale + 8}px`;
+    input.rows = 1;
+
+    document.body.appendChild(input);
+    input.focus();
+
+    this._activeTextInput = input;
+    this._activeTextPoint = point;
+    this._activeTextFontSize = fontSize;
+
+    // Auto-resize
+    const autoResize = () => {
+      input.style.height = 'auto';
+      input.style.height = input.scrollHeight + 'px';
+    };
+    input.addEventListener('input', autoResize);
+
+    // Commit on blur or Escape
+    const commit = () => {
+      const text = input.value.trim();
+      if (text) {
+        const textItem = {
+          id: `txt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          text,
+          x: point.x,
+          y: point.y,
+          color: this.color,
+          fontSize,
+          layer: this.layer,
+        };
+        this.textItems.push(textItem);
+        this.callbacks.onAddText?.(textItem);
+      }
+      this._closeTextInput();
+    };
+
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') {
+        input.removeEventListener('blur', commit);
+        this._closeTextInput();
+      }
+      // Shift+Enter for newline, Enter to commit
+      if (ev.key === 'Enter' && !ev.shiftKey) {
+        ev.preventDefault();
+        input.removeEventListener('blur', commit);
+        commit();
+      }
+    });
+  }
+
+  _closeTextInput() {
+    if (this._activeTextInput) {
+      this._activeTextInput.remove();
+      this._activeTextInput = null;
+      this._activeTextPoint = null;
+    }
+  }
+
+  _drawTextItems() {
+    const { ctx } = this;
+    for (const item of this.textItems) {
+      ctx.save();
+      ctx.fillStyle = item.color;
+      ctx.font = `${item.fontSize}px Inter, system-ui, sans-serif`;
+      ctx.textBaseline = 'top';
+
+      // Draw each line
+      const lines = item.text.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], item.x, item.y + i * item.fontSize * 1.2);
+      }
+      ctx.restore();
+    }
+  }
+
   // --- Public API ---
 
   setTool(tool) {
@@ -756,6 +874,19 @@ export class DrawingEngine {
       }
       // YouTube items are rendered as DOM overlays, not on canvas
     }
+  }
+
+  // Text management
+  addText(item) {
+    this.textItems.push(item);
+  }
+
+  removeText(id) {
+    this.textItems = this.textItems.filter((t) => t.id !== id);
+  }
+
+  setTextItems(items) {
+    this.textItems = items || [];
   }
 
   clearStrokes() {

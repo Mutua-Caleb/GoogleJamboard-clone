@@ -81,6 +81,7 @@ function roomToJam(room, title) {
     createdAt: room.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     strokes: room.strokes,
+    textItems: room.textItems || [],
     media: room.media || [],
     pdfUrl: room.pdfUrl,
     pdfPage: room.pdfPage,
@@ -216,6 +217,7 @@ function createRoom(hostId, hostName) {
     host: hostId,
     users: new Map(),
     strokes: [],
+    textItems: [],
     media: [],  // images & youtube embeds
     pdfUrl: null,
     pdfPage: 1,
@@ -247,6 +249,7 @@ function createRoomFromJam(hostId, jam) {
     host: hostId,
     users: new Map(),
     strokes: jam.strokes || [],
+    textItems: jam.textItems || [],
     media: jam.media || [],
     pdfUrl: jam.pdfUrl || null,
     pdfPage: jam.pdfPage || 1,
@@ -311,6 +314,7 @@ io.on('connection', (socket) => {
       color: userColor,
       room: getRoomInfo(room),
       strokes: room.strokes,
+      textItems: room.textItems || [],
       media: room.media || [],
       pdfStrokes: room.pdfUrl ? (room.pages.get(room.pdfPage) || []) : [],
     });
@@ -334,6 +338,7 @@ io.on('connection', (socket) => {
       color: userColor,
       room: getRoomInfo(room),
       strokes: room.strokes,
+      textItems: room.textItems || [],
       media: room.media || [],
       pdfStrokes: room.pdfUrl ? (room.pages.get(room.pdfPage) || []) : [],
     });
@@ -431,6 +436,35 @@ io.on('connection', (socket) => {
     scheduleAutoSave(currentRoom);
   });
 
+  // Text items
+  socket.on('add-text', (data) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    room.textItems.push(data);
+    socket.to(currentRoom).emit('add-text', data);
+    scheduleAutoSave(currentRoom);
+  });
+
+  socket.on('remove-text', (data) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    room.textItems = room.textItems.filter((t) => t.id !== data.id);
+    socket.to(currentRoom).emit('remove-text', data);
+    scheduleAutoSave(currentRoom);
+  });
+
+  socket.on('update-text', (data) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) return;
+    const item = room.textItems.find((t) => t.id === data.id);
+    if (item) Object.assign(item, data);
+    socket.to(currentRoom).emit('update-text', data);
+    scheduleAutoSave(currentRoom);
+  });
+
   // Cursor tracking
   socket.on('cursor-move', (data) => {
     if (!currentRoom) return;
@@ -483,6 +517,7 @@ io.on('connection', (socket) => {
       room.pages.set(room.pdfPage, []);
     } else {
       room.strokes = [];
+      room.textItems = [];
     }
     io.to(currentRoom).emit('clear-board', data);
     scheduleAutoSave(currentRoom);

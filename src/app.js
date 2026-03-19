@@ -170,6 +170,18 @@ class CollabBoardApp {
       }
     });
 
+    // Remote text
+    this.collab.on('add-text', (data) => {
+      this.engine?.addText(data);
+    });
+    this.collab.on('remove-text', (data) => {
+      this.engine?.removeText(data.id);
+    });
+    this.collab.on('update-text', (data) => {
+      const item = this.engine?.textItems.find((t) => t.id === data.id);
+      if (item) Object.assign(item, data);
+    });
+
     this.collab.on('add-media', (data) => {
       this.engine?.addMedia(data);
       if (data.type === 'youtube') this._createYouTubeOverlay(data);
@@ -216,6 +228,7 @@ class CollabBoardApp {
 
     this.collab.on('clear-board', (data) => {
       this.engine?.clearStrokes();
+      this.engine?.setTextItems([]);
     });
 
     this.collab.on('sync-strokes', (data) => {
@@ -254,6 +267,9 @@ class CollabBoardApp {
       if (response.strokes?.length) {
         this.engine.setStrokes(response.strokes);
       }
+      if (response.textItems?.length) {
+        this.engine.setTextItems(response.textItems);
+      }
       if (response.media?.length) {
         this._loadMedia(response.media);
       }
@@ -289,6 +305,9 @@ class CollabBoardApp {
 
       if (response.strokes?.length) {
         this.engine.setStrokes(response.strokes);
+      }
+      if (response.textItems?.length) {
+        this.engine.setTextItems(response.textItems);
       }
       if (response.media?.length) {
         this._loadMedia(response.media);
@@ -329,6 +348,9 @@ class CollabBoardApp {
       onErase: (data) => this.collab.sendErase(data),
       onCursorMove: (data) => this.collab.sendCursorMove(data),
       onViewportChange: (data) => this.collab.sendViewportChange(data),
+      onAddText: (data) => this.collab.sendAddText(data),
+      onRemoveText: (data) => this.collab.sendRemoveText(data),
+      onUpdateText: (data) => this.collab.sendUpdateText(data),
     });
 
     this._selectTool('pen');
@@ -354,7 +376,7 @@ class CollabBoardApp {
     this.engine?.setTool(tool);
 
     const canvas = document.getElementById('draw-canvas');
-    canvas.style.cursor = 'crosshair';
+    canvas.style.cursor = tool === 'text' ? 'text' : 'crosshair';
   }
 
   _selectColor(color) {
@@ -367,6 +389,7 @@ class CollabBoardApp {
   _clearBoard() {
     const layer = this.pdfMode ? 'pdf' : 'whiteboard';
     this.engine?.clearStrokes();
+    this.engine?.setTextItems([]);
     this.collab.sendClearBoard({ layer });
   }
 
@@ -457,6 +480,7 @@ class CollabBoardApp {
 
   async _handlePaste(e) {
     if (!this.inRoom) return;
+    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
     const items = e.clipboardData?.items;
     if (!items) return;
 
@@ -1087,12 +1111,13 @@ class CollabBoardApp {
 
   _handleKeyboard(e) {
     if (!this.inRoom) return;
-    if (e.target.tagName === 'INPUT' || e.target.isContentEditable) return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
 
     if (e.key === 'p' || e.key === '1') this._selectTool('pen');
     else if (e.key === 'l' || e.key === '2') this._selectTool('pencil');
     else if (e.key === 'h' || e.key === '3') this._selectTool('highlighter');
     else if (e.key === 'e' || e.key === '4') this._selectTool('eraser');
+    else if (e.key === 't' || e.key === '5') this._selectTool('text');
     else if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       this._undo();

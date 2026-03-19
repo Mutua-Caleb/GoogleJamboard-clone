@@ -1011,6 +1011,32 @@ body {
 }
 
 /* ============================
+   Text Input Overlay
+   ============================ */
+
+.canvas-text-input {
+  position: fixed;
+  background: transparent;
+  border: 1px dashed rgba(124, 58, 237, 0.6);
+  border-radius: 2px;
+  outline: none;
+  padding: 4px 6px;
+  resize: none;
+  overflow: hidden;
+  line-height: 1.2;
+  z-index: 100;
+  caret-color: var(--accent);
+  font-weight: 500;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.canvas-text-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.3);
+}
+
+/* ============================
    Animations
    ============================ */
 

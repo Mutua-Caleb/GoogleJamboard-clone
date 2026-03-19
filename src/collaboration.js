@@ -36,7 +36,7 @@ export class CollaborationManager {
       'cursor-move', 'viewport-change', 'add-media', 'remove-media', 'move-media',
       'user-joined', 'user-left',
       'load-pdf', 'close-pdf', 'pdf-page-change', 'clear-board', 'sync-strokes',
-      'jam-renamed',
+      'jam-renamed', 'add-text', 'remove-text', 'update-text',
     ];
     events.forEach((evt) => {
       this.socket.on(evt, (data) => this._emit(evt, data));
@@ -121,6 +121,18 @@ export class CollaborationManager {
 
   sendClearBoard(data) {
     this.socket?.emit('clear-board', data);
+  }
+
+  sendAddText(data) {
+    this.socket?.emit('add-text', data);
+  }
+
+  sendRemoveText(data) {
+    this.socket?.emit('remove-text', data);
+  }
+
+  sendUpdateText(data) {
+    this.socket?.emit('update-text', data);
   }
 
   sendUndo(data) {
