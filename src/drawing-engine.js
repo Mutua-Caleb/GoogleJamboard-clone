@@ -464,11 +464,17 @@ export class DrawingEngine {
   // --- Rendering ---
 
   _startRenderLoop() {
+    this._alive = true;
     const render = () => {
+      if (!this._alive) return;
       this._render();
       requestAnimationFrame(render);
     };
     requestAnimationFrame(render);
+  }
+
+  destroy() {
+    this._alive = false;
   }
 
   _render() {
@@ -691,7 +697,13 @@ export class DrawingEngine {
   }
 
   setStrokes(strokes) {
-    this.strokes = strokes;
+    // Deduplicate by stroke ID to prevent double rendering
+    const seen = new Set();
+    this.strokes = strokes.filter((s) => {
+      if (!s.id || seen.has(s.id)) return false;
+      seen.add(s.id);
+      return true;
+    });
   }
 
   addStroke(stroke) {
@@ -795,8 +807,8 @@ export class DrawingEngine {
       this.strokes = this.strokes.filter((s) => s.id !== existing.id);
     }
     this._remoteStrokes.delete(data.userId);
-    // Add the final stroke
-    if (data.tool !== 'eraser') {
+    // Add the final stroke (skip if already present, e.g. from setStrokes)
+    if (data.tool !== 'eraser' && !this.strokes.some((s) => s.id === data.id)) {
       this.strokes.push(data);
     }
   }

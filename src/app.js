@@ -314,6 +314,12 @@ class CollabBoardApp {
     document.getElementById('jam-title').textContent = this._currentRoomInfo.title || 'Untitled Jam';
     this._updateUserList();
 
+    // Destroy old engine if re-entering (prevents stale render loops)
+    if (this.engine) {
+      this.engine.destroy();
+      this.engine = null;
+    }
+
     // Init drawing engine
     const canvas = document.getElementById('draw-canvas');
     this.engine = new DrawingEngine(canvas, {
@@ -801,6 +807,12 @@ class CollabBoardApp {
     if (this._thumbnailInterval) clearInterval(this._thumbnailInterval);
     if (this._ytUpdateInterval) { clearInterval(this._ytUpdateInterval); this._ytUpdateInterval = null; }
     document.querySelectorAll('.youtube-overlay').forEach((el) => el.remove());
+
+    // Stop old engine render loop
+    if (this.engine) {
+      this.engine.destroy();
+      this.engine = null;
+    }
 
     this.collab.disconnect();
     this.inRoom = false;
