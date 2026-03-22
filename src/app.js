@@ -47,8 +47,8 @@ class CollabBoardApp {
     // Notebook
     document.getElementById('btn-notebook-back').addEventListener('click', () => this._hideNotebook());
 
-    // Tools
-    document.querySelectorAll('.tool-btn').forEach((btn) => {
+    // Tools - only bind to buttons that actually have a data-tool attribute
+    document.querySelectorAll('.tool-btn[data-tool]').forEach((btn) => {
       btn.addEventListener('click', () => this._selectTool(btn.dataset.tool));
     });
 
@@ -89,6 +89,9 @@ class CollabBoardApp {
     // YouTube embed
     document.getElementById('btn-add-youtube').addEventListener('click', () => this._promptYouTubeUrl());
 
+    // Cursive practice
+    document.getElementById('btn-cursive').addEventListener('click', () => this._promptCursivePractice());
+
     // Paste handler for images
     document.addEventListener('paste', (e) => this._handlePaste(e));
 
@@ -121,8 +124,19 @@ class CollabBoardApp {
     });
 
     this.collab.on('disconnected', () => {
-      document.getElementById('connection-status').textContent = 'Disconnected';
+      document.getElementById('connection-status').textContent = 'Reconnecting...';
       document.getElementById('connection-status').className = 'status-dot disconnected';
+      if (this.inRoom) {
+        this._showToast('Connection lost. Reconnecting...', 'error');
+      }
+    });
+
+    this.collab.on('reconnected', () => {
+      document.getElementById('connection-status').textContent = 'Connected';
+      document.getElementById('connection-status').className = 'status-dot connected';
+      if (this.inRoom) {
+        this._autoRejoinCurrentRoom();
+      }
     });
 
     // Remote drawing
@@ -825,12 +839,122 @@ class CollabBoardApp {
     }
   }
 
+  // ============================
+  // Cursive Practice
+  // ============================
+
+  _promptCursivePractice() {
+    const existing = document.getElementById('cursive-modal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'cursive-modal';
+    modal.className = 'youtube-modal'; // reuse modal styles
+    modal.innerHTML = `
+      <div class="youtube-modal-content">
+        <h3>Cursive Practice</h3>
+        <p style="font-size:13px;color:#a0aec0;margin-bottom:12px;">
+          Type letters or words to trace. They'll appear as faint guide text on the canvas.
+          Trace over them with your pen, then click "Hide" to test your memory!
+        </p>
+        <input type="text" id="cursive-text-input" placeholder="Type text to practice (e.g. Hello World)" autocomplete="off" maxlength="50" />
+        <div style="margin-top:12px;">
+          <label style="font-size:13px;color:#a0aec0;">Size</label>
+          <input type="range" id="cursive-size-input" min="40" max="200" value="80" style="width:100%;" />
+        </div>
+        <div class="youtube-modal-actions" style="margin-top:16px;">
+          <button id="cursive-modal-cancel" class="btn btn-secondary btn-sm">Cancel</button>
+          <button id="cursive-modal-add" class="btn btn-primary btn-sm">Place on Canvas</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const input = document.getElementById('cursive-text-input');
+    input.focus();
+
+    const close = () => modal.remove();
+
+    document.getElementById('cursive-modal-cancel').addEventListener('click', close);
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+
+    const addPractice = () => {
+      const text = input.value.trim();
+      if (!text) {
+        this._showToast('Please enter text to practice', 'error');
+        return;
+      }
+      const fontSize = parseInt(document.getElementById('cursive-size-input').value);
+      close();
+      this._placeCursivePractice(text, fontSize);
+    };
+
+    document.getElementById('cursive-modal-add').addEventListener('click', addPractice);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') addPractice();
+      if (e.key === 'Escape') close();
+    });
+  }
+
+  _placeCursivePractice(text, fontSize) {
+    if (!this.engine) return;
+
+    const vp = this.engine._getViewportRect();
+    const x = vp ? vp.x + (vp.width - text.length * fontSize * 0.5) / 2 : 100;
+    const y = vp ? vp.y + vp.height / 2 - fontSize / 2 : 200;
+
+    const practiceItem = {
+      id: `cursive-${Date.now()}`,
+      text,
+      x,
+      y,
+      fontSize,
+      visible: true,
+    };
+
+    this.engine.addCursivePractice(practiceItem);
+    this._showToast('Trace the letters! Press "Hide Guides" when ready to practice from memory.');
+
+    // Show a floating control to toggle/remove the guide
+    this._showCursiveControls(practiceItem.id);
+  }
+
+  _showCursiveControls(practiceId) {
+    const existing = document.getElementById('cursive-controls');
+    if (existing) existing.remove();
+
+    const bar = document.createElement('div');
+    bar.id = 'cursive-controls';
+    bar.className = 'cursive-controls';
+    bar.innerHTML = `
+      <span class="cursive-controls-label">Cursive Practice</span>
+      <button id="cursive-toggle" class="btn btn-sm btn-secondary">Hide Guides</button>
+      <button id="cursive-remove" class="btn btn-sm btn-danger">Remove</button>
+    `;
+    document.getElementById('canvas-area').appendChild(bar);
+
+    document.getElementById('cursive-toggle').addEventListener('click', () => {
+      const item = this.engine?.cursivePractices?.find(p => p.id === practiceId);
+      if (item) {
+        item.visible = !item.visible;
+        document.getElementById('cursive-toggle').textContent = item.visible ? 'Hide Guides' : 'Show Guides';
+      }
+    });
+
+    document.getElementById('cursive-remove').addEventListener('click', () => {
+      this.engine?.removeCursivePractice(practiceId);
+      bar.remove();
+    });
+  }
+
   _leaveRoom() {
     this._saveThumbnail();
     this._clearSession();
     if (this._thumbnailInterval) clearInterval(this._thumbnailInterval);
     if (this._ytUpdateInterval) { clearInterval(this._ytUpdateInterval); this._ytUpdateInterval = null; }
     document.querySelectorAll('.youtube-overlay').forEach((el) => el.remove());
+    const cursiveCtrl = document.getElementById('cursive-controls');
+    if (cursiveCtrl) cursiveCtrl.remove();
 
     // Stop old engine render loop
     if (this.engine) {
@@ -1162,6 +1286,42 @@ class CollabBoardApp {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  // Auto-rejoin after reconnect (network drop recovery)
+  async _autoRejoinCurrentRoom() {
+    if (!this.collab.roomId || !this.collab.userName) return;
+
+    try {
+      const response = await this.collab.rejoinRoom(this.collab.roomId, this.collab.userName);
+      if (response.success) {
+        this._currentRoomInfo = response.room;
+        this._updateUserList();
+
+        // Restore state from server
+        if (response.strokes?.length) {
+          this.engine?.setStrokes(response.strokes);
+        }
+        if (response.textItems?.length) {
+          this.engine?.setTextItems(response.textItems);
+        }
+        if (response.media?.length) {
+          this.engine?.setMedia(response.media);
+          for (const item of response.media) {
+            if (item.type === 'youtube') this._createYouTubeOverlay(item);
+          }
+        }
+        this._showToast('Reconnected!');
+      } else {
+        // Room was cleaned up, fall back to jam-based rejoin
+        this._showToast('Room expired. Reopening jam...', 'error');
+        if (this.currentJamId) {
+          await this._createRoom(this.currentJamId);
+        }
+      }
+    } catch {
+      this._showToast('Failed to reconnect', 'error');
+    }
   }
 
   // Session persistence

@@ -29,6 +29,9 @@ export class DrawingEngine {
     // Text items rendered on canvas
     this.textItems = [];
 
+    // Cursive practice guide items
+    this.cursivePractices = [];
+
     // Pan & zoom
     this.transform = { x: 0, y: 0, scale: 1 };
     this.isPanning = false;
@@ -519,6 +522,9 @@ export class DrawingEngine {
       this.transform.y * dpr
     );
 
+    // Draw cursive practice guides (underneath everything so user traces on top)
+    this._drawCursivePractices();
+
     // Draw media items (images) under strokes so annotations appear on top
     this._drawMediaItems();
 
@@ -794,6 +800,58 @@ export class DrawingEngine {
       }
       ctx.restore();
     }
+  }
+
+  // --- Cursive Practice ---
+
+  _drawCursivePractices() {
+    const { ctx } = this;
+    for (const item of this.cursivePractices) {
+      if (!item.visible) continue;
+
+      ctx.save();
+      ctx.globalAlpha = 0.2;
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = `italic ${item.fontSize}px 'Segoe Script', 'Dancing Script', 'Brush Script MT', cursive, serif`;
+      ctx.textBaseline = 'top';
+
+      // Draw each character with spacing
+      const chars = item.text.split('');
+      let xOffset = 0;
+      for (const char of chars) {
+        ctx.fillText(char, item.x + xOffset, item.y);
+        xOffset += ctx.measureText(char).width;
+      }
+
+      // Draw baseline guide
+      ctx.globalAlpha = 0.1;
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      const baselineY = item.y + item.fontSize * 0.85;
+      ctx.beginPath();
+      ctx.moveTo(item.x - 10, baselineY);
+      ctx.lineTo(item.x + xOffset + 10, baselineY);
+      ctx.stroke();
+
+      // Draw midline guide
+      const midlineY = item.y + item.fontSize * 0.45;
+      ctx.beginPath();
+      ctx.moveTo(item.x - 10, midlineY);
+      ctx.lineTo(item.x + xOffset + 10, midlineY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.restore();
+    }
+  }
+
+  addCursivePractice(item) {
+    this.cursivePractices.push(item);
+  }
+
+  removeCursivePractice(id) {
+    this.cursivePractices = this.cursivePractices.filter(p => p.id !== id);
   }
 
   // --- Public API ---

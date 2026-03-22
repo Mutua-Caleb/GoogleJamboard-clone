@@ -20,14 +20,22 @@ export class CollaborationManager {
 
     this.socket = io(url, {
       transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 30,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
     });
 
     this.socket.on('connect', () => {
       this._emit('connected');
     });
 
-    this.socket.on('disconnect', () => {
-      this._emit('disconnected');
+    this.socket.on('disconnect', (reason) => {
+      this._emit('disconnected', { reason });
+    });
+
+    this.socket.on('reconnect', () => {
+      this._emit('reconnected');
     });
 
     // Relay all real-time events
@@ -60,6 +68,20 @@ export class CollaborationManager {
   joinRoom(roomId, name) {
     return new Promise((resolve) => {
       this.socket.emit('join-room', { roomId, name }, (response) => {
+        if (response.success) {
+          this.roomId = response.roomId;
+          this.userId = response.userId;
+          this.userName = name;
+          this.userColor = response.color;
+        }
+        resolve(response);
+      });
+    });
+  }
+
+  rejoinRoom(roomId, name) {
+    return new Promise((resolve) => {
+      this.socket.emit('rejoin-room', { roomId, name }, (response) => {
         if (response.success) {
           this.roomId = response.roomId;
           this.userId = response.userId;

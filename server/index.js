@@ -90,6 +90,10 @@ function roomToJam(room, title) {
   };
 }
 
+// Disconnect grace period: keep user slot for 3 minutes
+const DISCONNECT_GRACE_MS = 3 * 60 * 1000;
+const disconnectTimers = new Map(); // socketId -> { timer, roomId, userInfo }
+
 // Auto-save debounce per room
 const autoSaveTimers = new Map();
 
@@ -565,29 +569,95 @@ io.on('connection', (socket) => {
     io.to(currentRoom).emit('jam-renamed', { title: data.title });
   });
 
+  // Rejoin after reconnect (same room, same user)
+  socket.on('rejoin-room', ({ roomId, name }, callback) => {
+    const room = rooms.get(roomId);
+    if (!room) return callback({ success: false, error: 'Room not found' });
+
+    // Cancel any pending disconnect cleanup for this user
+    for (const [oldSocketId, info] of disconnectTimers.entries()) {
+      if (info.roomId === roomId && info.userInfo.name === name) {
+        clearTimeout(info.timer);
+        disconnectTimers.delete(oldSocketId);
+        // Remove the ghost user entry if it's still there
+        room.users.delete(oldSocketId);
+      }
+    }
+
+    if (room.users.size >= MAX_USERS_PER_ROOM) {
+      return callback({ success: false, error: 'Room is full (max 4 users)' });
+    }
+
+    const userColor = USER_COLORS[room.users.size];
+    room.users.set(socket.id, { name, color: userColor });
+    socket.join(roomId);
+    currentRoom = roomId;
+
+    callback({
+      success: true,
+      roomId,
+      userId: socket.id,
+      color: userColor,
+      room: getRoomInfo(room),
+      strokes: room.strokes,
+      textItems: room.textItems || [],
+      media: room.media || [],
+      pdfStrokes: room.pdfUrl ? (room.pages.get(room.pdfPage) || []) : [],
+    });
+
+    socket.to(roomId).emit('user-joined', {
+      id: socket.id,
+      name,
+      color: userColor,
+      room: getRoomInfo(room),
+    });
+  });
+
   socket.on('disconnect', () => {
     if (!currentRoom) return;
     const room = rooms.get(currentRoom);
     if (!room) return;
 
+    const userInfo = room.users.get(socket.id);
+    const roomId = currentRoom;
+
+    // Don't remove immediately - give a grace period for reconnection
     room.users.delete(socket.id);
+
     if (room.users.size === 0) {
-      // Final save before cleanup
-      if (room.jamId) {
-        const jam = roomToJam(room);
-        saveJam(jam);
-      }
-      rooms.delete(currentRoom);
-      // Clear any pending auto-save
-      if (autoSaveTimers.has(currentRoom)) {
-        clearTimeout(autoSaveTimers.get(currentRoom));
-        autoSaveTimers.delete(currentRoom);
-      }
+      // Last user disconnected - start grace period before cleanup
+      const timer = setTimeout(() => {
+        disconnectTimers.delete(socket.id);
+        const r = rooms.get(roomId);
+        if (r && r.users.size === 0) {
+          // Still empty after grace period - save and cleanup
+          if (r.jamId) {
+            const jam = roomToJam(r);
+            saveJam(jam);
+          }
+          rooms.delete(roomId);
+          if (autoSaveTimers.has(roomId)) {
+            clearTimeout(autoSaveTimers.get(roomId));
+            autoSaveTimers.delete(roomId);
+          }
+        }
+      }, DISCONNECT_GRACE_MS);
+
+      disconnectTimers.set(socket.id, { timer, roomId, userInfo: userInfo || { name: 'Unknown' } });
     } else {
-      io.to(currentRoom).emit('user-left', {
+      // Other users still in room - notify them but keep room alive
+      io.to(roomId).emit('user-left', {
         id: socket.id,
         room: getRoomInfo(room),
       });
+
+      // Still set a grace timer so the user can rejoin and the room data stays fresh
+      if (userInfo) {
+        const timer = setTimeout(() => {
+          disconnectTimers.delete(socket.id);
+        }, DISCONNECT_GRACE_MS);
+        disconnectTimers.set(socket.id, { timer, roomId, userInfo });
+      }
     }
   });
 });

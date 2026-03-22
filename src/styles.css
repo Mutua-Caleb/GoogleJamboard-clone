@@ -1037,6 +1037,32 @@ body {
 }
 
 /* ============================
+   Cursive Practice Controls
+   ============================ */
+
+.cursive-controls {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  box-shadow: var(--shadow);
+}
+
+.cursive-controls-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* ============================
    Animations
    ============================ */
 
