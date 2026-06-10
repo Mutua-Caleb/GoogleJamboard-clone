@@ -219,6 +219,7 @@ function createRoom(hostId, hostName) {
   const room = {
     id: roomId,
     host: hostId,
+    hostClientId: null,
     users: new Map(),
     strokes: [],
     textItems: [],
@@ -251,6 +252,7 @@ function createRoomFromJam(hostId, jam) {
   const room = {
     id: roomId,
     host: hostId,
+    hostClientId: null,
     users: new Map(),
     strokes: jam.strokes || [],
     textItems: jam.textItems || [],
@@ -271,7 +273,7 @@ function createRoomFromJam(hostId, jam) {
 function getRoomInfo(room) {
   const users = [];
   room.users.forEach((u, id) => {
-    users.push({ id, name: u.name, color: u.color });
+    users.push({ id, name: u.name, color: u.color, clientId: u.clientId });
   });
   return {
     id: room.id,
@@ -286,13 +288,60 @@ function getRoomInfo(room) {
 
 const USER_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4'];
 
+function getPendingDisconnects(roomId) {
+  return [...disconnectTimers.entries()].filter(([, info]) => info.roomId === roomId);
+}
+
+function findPendingUser(roomId, clientId, name) {
+  return getPendingDisconnects(roomId).find(([, info]) => {
+    if (clientId && info.userInfo?.clientId === clientId) return true;
+    return !clientId && name && info.userInfo?.name === name;
+  });
+}
+
+function clearPendingDisconnect(oldSocketId, room) {
+  const info = disconnectTimers.get(oldSocketId);
+  if (!info) return null;
+  clearTimeout(info.timer);
+  disconnectTimers.delete(oldSocketId);
+  room.users.delete(oldSocketId);
+  return info.userInfo;
+}
+
+function getReservedUserCount(roomId) {
+  const clientIds = new Set();
+  let anonymousCount = 0;
+  for (const [, info] of getPendingDisconnects(roomId)) {
+    if (info.userInfo?.clientId) clientIds.add(info.userInfo.clientId);
+    else anonymousCount++;
+  }
+  return clientIds.size + anonymousCount;
+}
+
+function getNextUserColor(room, preferredColor = null) {
+  if (preferredColor) return preferredColor;
+  const used = new Set([...room.users.values()].map((u) => u.color));
+  return USER_COLORS.find((color) => !used.has(color)) || USER_COLORS[room.users.size % USER_COLORS.length];
+}
+
+function getRoomState(room) {
+  return {
+    room: getRoomInfo(room),
+    strokes: room.strokes,
+    textItems: room.textItems || [],
+    media: room.media || [],
+    pdfStrokes: room.pdfUrl ? (room.pages.get(room.pdfPage) || []) : [],
+  };
+}
+
 // ============================
 // Socket.IO
 // ============================
 io.on('connection', (socket) => {
   let currentRoom = null;
+  let currentClientId = null;
 
-  socket.on('create-room', ({ name, jamId }, callback) => {
+  socket.on('create-room', ({ name, jamId, clientId }, callback) => {
     let room;
     // If opening an existing jam, load it
     if (jamId) {
@@ -307,44 +356,39 @@ io.on('connection', (socket) => {
     }
 
     const userColor = USER_COLORS[0];
-    room.users.set(socket.id, { name, color: userColor });
+    room.hostClientId = clientId;
+    room.users.set(socket.id, { name, color: userColor, clientId });
     socket.join(room.id);
     currentRoom = room.id;
+    currentClientId = clientId;
 
     callback({
       success: true,
       roomId: room.id,
       userId: socket.id,
       color: userColor,
-      room: getRoomInfo(room),
-      strokes: room.strokes,
-      textItems: room.textItems || [],
-      media: room.media || [],
-      pdfStrokes: room.pdfUrl ? (room.pages.get(room.pdfPage) || []) : [],
+      ...getRoomState(room),
     });
   });
 
-  socket.on('join-room', ({ roomId, name }, callback) => {
+  socket.on('join-room', ({ roomId, name, clientId }, callback) => {
     const room = rooms.get(roomId);
     if (!room) return callback({ success: false, error: 'Room not found' });
-    if (room.users.size >= MAX_USERS_PER_ROOM)
+    if (room.users.size + getReservedUserCount(roomId) >= MAX_USERS_PER_ROOM)
       return callback({ success: false, error: 'Room is full (max 4 users)' });
 
-    const userColor = USER_COLORS[room.users.size];
-    room.users.set(socket.id, { name, color: userColor });
+    const userColor = getNextUserColor(room);
+    room.users.set(socket.id, { name, color: userColor, clientId });
     socket.join(roomId);
     currentRoom = roomId;
+    currentClientId = clientId;
 
     callback({
       success: true,
       roomId,
       userId: socket.id,
       color: userColor,
-      room: getRoomInfo(room),
-      strokes: room.strokes,
-      textItems: room.textItems || [],
-      media: room.media || [],
-      pdfStrokes: room.pdfUrl ? (room.pages.get(room.pdfPage) || []) : [],
+      ...getRoomState(room),
     });
 
     socket.to(roomId).emit('user-joined', {
@@ -358,12 +402,12 @@ io.on('connection', (socket) => {
   // Real-time drawing events
   socket.on('stroke-start', (data) => {
     if (!currentRoom) return;
-    socket.to(currentRoom).emit('stroke-start', { ...data, userId: socket.id });
+    socket.to(currentRoom).emit('stroke-start', { ...data, userId: socket.id, clientId: currentClientId });
   });
 
   socket.on('stroke-move', (data) => {
     if (!currentRoom) return;
-    socket.to(currentRoom).emit('stroke-move', { ...data, userId: socket.id });
+    socket.to(currentRoom).emit('stroke-move', { ...data, userId: socket.id, clientId: currentClientId });
   });
 
   socket.on('stroke-end', (data) => {
@@ -371,7 +415,7 @@ io.on('connection', (socket) => {
     const room = rooms.get(currentRoom);
     if (!room) return;
 
-    const strokeData = { ...data, userId: socket.id };
+    const strokeData = { ...data, userId: socket.id, clientId: currentClientId };
 
     if (room.pdfUrl && data.layer === 'pdf') {
       const page = room.pdfPage;
@@ -536,10 +580,10 @@ io.on('connection', (socket) => {
     if (data?.layer === 'pdf') {
       const page = room.pdfPage;
       const strokes = room.pages.get(page) || [];
-      const idx = strokes.findLastIndex((s) => s.userId === socket.id);
+      const idx = strokes.findLastIndex((s) => s.userId === socket.id || (currentClientId && s.clientId === currentClientId));
       if (idx !== -1) strokes.splice(idx, 1);
     } else {
-      const idx = room.strokes.findLastIndex((s) => s.userId === socket.id);
+      const idx = room.strokes.findLastIndex((s) => s.userId === socket.id || (currentClientId && s.clientId === currentClientId));
       if (idx !== -1) room.strokes.splice(idx, 1);
     }
     io.to(currentRoom).emit('sync-strokes', {
@@ -570,39 +614,31 @@ io.on('connection', (socket) => {
   });
 
   // Rejoin after reconnect (same room, same user)
-  socket.on('rejoin-room', ({ roomId, name }, callback) => {
+  socket.on('rejoin-room', ({ roomId, name, clientId }, callback) => {
     const room = rooms.get(roomId);
     if (!room) return callback({ success: false, error: 'Room not found' });
 
-    // Cancel any pending disconnect cleanup for this user
-    for (const [oldSocketId, info] of disconnectTimers.entries()) {
-      if (info.roomId === roomId && info.userInfo.name === name) {
-        clearTimeout(info.timer);
-        disconnectTimers.delete(oldSocketId);
-        // Remove the ghost user entry if it's still there
-        room.users.delete(oldSocketId);
-      }
-    }
+    const pendingUser = findPendingUser(roomId, clientId, name);
+    const restoredUser = pendingUser ? clearPendingDisconnect(pendingUser[0], room) : null;
 
-    if (room.users.size >= MAX_USERS_PER_ROOM) {
+    if (!restoredUser && room.users.size + getReservedUserCount(roomId) >= MAX_USERS_PER_ROOM) {
       return callback({ success: false, error: 'Room is full (max 4 users)' });
     }
 
-    const userColor = USER_COLORS[room.users.size];
-    room.users.set(socket.id, { name, color: userColor });
+    const userColor = getNextUserColor(room, restoredUser?.color);
+    if (restoredUser && room.host === pendingUser[0]) room.host = socket.id;
+    if (room.hostClientId && room.hostClientId === clientId) room.host = socket.id;
+    room.users.set(socket.id, { name, color: userColor, clientId });
     socket.join(roomId);
     currentRoom = roomId;
+    currentClientId = clientId;
 
     callback({
       success: true,
       roomId,
       userId: socket.id,
       color: userColor,
-      room: getRoomInfo(room),
-      strokes: room.strokes,
-      textItems: room.textItems || [],
-      media: room.media || [],
-      pdfStrokes: room.pdfUrl ? (room.pages.get(room.pdfPage) || []) : [],
+      ...getRoomState(room),
     });
 
     socket.to(roomId).emit('user-joined', {

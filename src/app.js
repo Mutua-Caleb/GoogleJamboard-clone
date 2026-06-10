@@ -127,6 +127,7 @@ class CollabBoardApp {
       document.getElementById('connection-status').textContent = 'Reconnecting...';
       document.getElementById('connection-status').className = 'status-dot disconnected';
       if (this.inRoom) {
+        this.engine?.cancelActiveStroke();
         this._showToast('Connection lost. Reconnecting...', 'error');
       }
     });
@@ -218,6 +219,7 @@ class CollabBoardApp {
       this._currentRoomInfo = data.room;
       this.engine?.removeRemoteCursor(data.id);
       this.engine?.removeRemoteViewport(data.id);
+      this.engine?.removeRemoteUserStrokes(data.id);
       this._updateUserList();
       this._showToast('A user left the board');
     });
@@ -242,7 +244,9 @@ class CollabBoardApp {
 
     this.collab.on('clear-board', (data) => {
       this.engine?.clearStrokes();
-      this.engine?.setTextItems([]);
+      if (data?.layer !== 'pdf') {
+        this.engine?.setTextItems([]);
+      }
     });
 
     this.collab.on('sync-strokes', (data) => {
@@ -276,23 +280,7 @@ class CollabBoardApp {
       this._currentRoomInfo = response.room;
       this.currentJamId = response.room.jamId;
       this._enterBoard();
-
-      // Load existing strokes if reopening a jam
-      if (response.strokes?.length) {
-        this.engine.setStrokes(response.strokes);
-      }
-      if (response.textItems?.length) {
-        this.engine.setTextItems(response.textItems);
-      }
-      if (response.media?.length) {
-        this._loadMedia(response.media);
-      }
-      if (response.room.pdfUrl) {
-        await this._loadPDFFromUrl(response.room.pdfUrl);
-        if (response.pdfStrokes?.length) {
-          this.engine.setStrokes(response.pdfStrokes);
-        }
-      }
+      await this._applyRoomState(response);
     }
   }
 
@@ -316,24 +304,43 @@ class CollabBoardApp {
       this._currentRoomInfo = response.room;
       this.currentJamId = response.room.jamId;
       this._enterBoard();
-
-      if (response.strokes?.length) {
-        this.engine.setStrokes(response.strokes);
-      }
-      if (response.textItems?.length) {
-        this.engine.setTextItems(response.textItems);
-      }
-      if (response.media?.length) {
-        this._loadMedia(response.media);
-      }
-      if (response.room.pdfUrl) {
-        await this._loadPDFFromUrl(response.room.pdfUrl);
-        if (response.pdfStrokes?.length) {
-          this.engine.setStrokes(response.pdfStrokes);
-        }
-      }
+      await this._applyRoomState(response);
     } else {
       this._showToast(response.error || 'Failed to join room', 'error');
+    }
+  }
+
+  async _applyRoomState(response) {
+    if (!response?.success || !this.engine) return;
+
+    this._currentRoomInfo = response.room;
+    this.currentJamId = response.room?.jamId || this.currentJamId;
+    document.getElementById('jam-title').textContent = response.room?.title || 'Untitled Jam';
+    this._updateUserList();
+
+    this.engine.clearTransientStrokes();
+    this.engine.setTextItems(response.textItems || []);
+    document.querySelectorAll('.youtube-overlay').forEach((el) => el.remove());
+    this.engine.setMedia(response.media || []);
+    for (const item of response.media || []) {
+      if (item.type === 'youtube') this._createYouTubeOverlay(item);
+    }
+
+    if (response.room?.pdfUrl) {
+      if (!this.pdfMode || !this.pdfViewer) {
+        await this._loadPDFFromUrl(response.room.pdfUrl, { silent: true });
+      }
+      if (this.pdfViewer && response.room.pdfPage) {
+        this.pdfViewer.goToPage(response.room.pdfPage);
+      }
+      this.pdfMode = true;
+      this.engine.setLayer('pdf');
+      this.engine.setStrokes(response.pdfStrokes || []);
+    } else {
+      if (this.pdfMode) this._closePDF(true);
+      this.pdfMode = false;
+      this.engine.setLayer('whiteboard');
+      this.engine.setStrokes(response.strokes || []);
     }
   }
 
@@ -448,7 +455,7 @@ class CollabBoardApp {
     e.target.value = '';
   }
 
-  async _loadPDFFromUrl(url) {
+  async _loadPDFFromUrl(url, options = {}) {
     this.pdfMode = true;
     this.engine?.setLayer('pdf');
     this.engine?.clearStrokes();
@@ -466,7 +473,7 @@ class CollabBoardApp {
     });
 
     await this.pdfViewer.loadPDF(url);
-    this._showToast('PDF loaded');
+    if (!options.silent) this._showToast('PDF loaded');
   }
 
   _closePDF(remote = false) {
@@ -1293,24 +1300,11 @@ class CollabBoardApp {
     if (!this.collab.roomId || !this.collab.userName) return;
 
     try {
+      this.engine?.clearTransientStrokes();
       const response = await this.collab.rejoinRoom(this.collab.roomId, this.collab.userName);
       if (response.success) {
-        this._currentRoomInfo = response.room;
-        this._updateUserList();
-
-        // Restore state from server
-        if (response.strokes?.length) {
-          this.engine?.setStrokes(response.strokes);
-        }
-        if (response.textItems?.length) {
-          this.engine?.setTextItems(response.textItems);
-        }
-        if (response.media?.length) {
-          this.engine?.setMedia(response.media);
-          for (const item of response.media) {
-            if (item.type === 'youtube') this._createYouTubeOverlay(item);
-          }
-        }
+        await this._applyRoomState(response);
+        this._saveSession();
         this._showToast('Reconnected!');
       } else {
         // Room was cleaned up, fall back to jam-based rejoin
@@ -1365,6 +1359,19 @@ class CollabBoardApp {
     });
 
     this.nameInput.value = session.name;
+    if (session.roomId) {
+      const response = await this.collab.rejoinRoom(session.roomId, session.name);
+      if (response.success) {
+        this._currentRoomInfo = response.room;
+        this.currentJamId = response.room.jamId;
+        this._enterBoard();
+        await this._applyRoomState(response);
+        this._saveSession();
+        this._showToast('Rejoined your board');
+        return;
+      }
+    }
+
     await this._createRoom(session.jamId);
   }
 

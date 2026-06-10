@@ -10,10 +10,14 @@ export class CollaborationManager {
     this.userId = null;
     this.userName = null;
     this.userColor = null;
+    this.clientId = this._getClientId();
     this.listeners = new Map();
+    this.hasConnectedOnce = false;
   }
 
   connect() {
+    if (this.socket?.connected || this.socket?.active) return;
+
     const url = window.location.hostname === 'localhost'
       ? 'http://localhost:3001'
       : window.location.origin;
@@ -27,15 +31,14 @@ export class CollaborationManager {
     });
 
     this.socket.on('connect', () => {
+      const wasReconnect = this.hasConnectedOnce && this.roomId && this.userName;
+      this.hasConnectedOnce = true;
       this._emit('connected');
+      if (wasReconnect) this._emit('reconnected');
     });
 
     this.socket.on('disconnect', (reason) => {
       this._emit('disconnected', { reason });
-    });
-
-    this.socket.on('reconnect', () => {
-      this._emit('reconnected');
     });
 
     // Relay all real-time events
@@ -53,7 +56,7 @@ export class CollaborationManager {
 
   createRoom(name, jamId) {
     return new Promise((resolve) => {
-      this.socket.emit('create-room', { name, jamId }, (response) => {
+      this.socket.emit('create-room', { name, jamId, clientId: this.clientId }, (response) => {
         if (response.success) {
           this.roomId = response.roomId;
           this.userId = response.userId;
@@ -67,7 +70,7 @@ export class CollaborationManager {
 
   joinRoom(roomId, name) {
     return new Promise((resolve) => {
-      this.socket.emit('join-room', { roomId, name }, (response) => {
+      this.socket.emit('join-room', { roomId, name, clientId: this.clientId }, (response) => {
         if (response.success) {
           this.roomId = response.roomId;
           this.userId = response.userId;
@@ -81,7 +84,7 @@ export class CollaborationManager {
 
   rejoinRoom(roomId, name) {
     return new Promise((resolve) => {
-      this.socket.emit('rejoin-room', { roomId, name }, (response) => {
+      this.socket.emit('rejoin-room', { roomId, name, clientId: this.clientId }, (response) => {
         if (response.success) {
           this.roomId = response.roomId;
           this.userId = response.userId;
@@ -189,5 +192,20 @@ export class CollaborationManager {
 
   disconnect() {
     this.socket?.disconnect();
+    this.socket = null;
+  }
+
+  _getClientId() {
+    try {
+      const key = 'collabboard-client-id';
+      let id = localStorage.getItem(key);
+      if (!id) {
+        id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        localStorage.setItem(key, id);
+      }
+      return id;
+    } catch {
+      return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
   }
 }

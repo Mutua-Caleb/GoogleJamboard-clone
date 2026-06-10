@@ -12,6 +12,7 @@ export class DrawingEngine {
     // State
     this.isDrawing = false;
     this.currentStroke = null;
+    this.activePointerId = null;
     this.tool = 'pen';        // pen | pencil | eraser | highlighter
     this.color = '#FFFFFF';
     this.size = 3;
@@ -77,8 +78,9 @@ export class DrawingEngine {
     this.canvas.addEventListener('pointerdown', (e) => this._onPointerDown(e));
     this.canvas.addEventListener('pointermove', (e) => this._onPointerMove(e));
     this.canvas.addEventListener('pointerup', (e) => this._onPointerUp(e));
-    this.canvas.addEventListener('pointerleave', (e) => this._onPointerUp(e));
+    this.canvas.addEventListener('lostpointercapture', (e) => this._onPointerUp(e));
     this.canvas.addEventListener('pointercancel', (e) => this._onPointerUp(e));
+    window.addEventListener('blur', () => this.cancelActiveStroke());
 
     // Prevent default touch behaviors for tablet
     this.canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
@@ -121,6 +123,8 @@ export class DrawingEngine {
     const pressure = e.pressure !== undefined && e.pressure > 0 ? e.pressure : 0.5;
 
     this.isDrawing = true;
+    this.activePointerId = e.pointerId;
+    this.canvas.setPointerCapture?.(e.pointerId);
     const strokeId = `${Date.now()}-${this.strokeIdCounter++}`;
 
     this.currentStroke = {
@@ -161,7 +165,7 @@ export class DrawingEngine {
       return;
     }
 
-    if (!this.isDrawing || !this.currentStroke) return;
+    if (!this.isDrawing || !this.currentStroke || e.pointerId !== this.activePointerId) return;
 
     const pressure = e.pressure !== undefined && e.pressure > 0 ? e.pressure : 0.5;
     this.currentStroke.points.push({ x: point.x, y: point.y, pressure });
@@ -183,9 +187,13 @@ export class DrawingEngine {
       return;
     }
 
-    if (!this.isDrawing || !this.currentStroke) return;
+    if (!this.isDrawing || !this.currentStroke || e.pointerId !== this.activePointerId) return;
 
     this.isDrawing = false;
+    this.activePointerId = null;
+    if (this.canvas.hasPointerCapture?.(e.pointerId)) {
+      this.canvas.releasePointerCapture(e.pointerId);
+    }
 
     if (this.tool !== 'eraser') {
       this.strokes.push({ ...this.currentStroke });
@@ -196,6 +204,15 @@ export class DrawingEngine {
     });
 
     this.currentStroke = null;
+  }
+
+  cancelActiveStroke() {
+    if (!this.isDrawing && !this.isPanning) return;
+    this.isDrawing = false;
+    this.isPanning = false;
+    this.currentStroke = null;
+    this.activePointerId = null;
+    this.canvas.style.cursor = '';
   }
 
   _onWheel(e) {
@@ -498,6 +515,7 @@ export class DrawingEngine {
 
   destroy() {
     this._alive = false;
+    this.cancelActiveStroke();
   }
 
   _render() {
@@ -529,6 +547,7 @@ export class DrawingEngine {
     this._drawMediaItems();
 
     // Draw all completed strokes
+    this._pruneStaleRemoteStrokes();
     for (const stroke of this.strokes) {
       this._drawStroke(stroke);
     }
@@ -653,20 +672,45 @@ export class DrawingEngine {
     // Grain texture overlay
     ctx.globalAlpha = (stroke.opacity ?? 1) * 0.15;
     ctx.fillStyle = stroke.color;
+    const seed = this._hashString(stroke.id || `${points[0].x},${points[0].y}`);
     for (let i = 1; i < points.length; i += 2) {
       const prev = points[i - 1];
       const curr = points[i];
       const dx = curr.x - prev.x;
       const dy = curr.y - prev.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
+      let grainIndex = 0;
       for (let j = 0; j < dist; j += 3) {
         const t = j / dist;
-        const x = prev.x + dx * t + (Math.random() - 0.5) * width;
-        const y = prev.y + dy * t + (Math.random() - 0.5) * width;
+        const noiseX = this._noise(seed + i * 73856093 + grainIndex * 19349663);
+        const noiseY = this._noise(seed + i * 83492791 + grainIndex * 2971215073);
+        const x = prev.x + dx * t + (noiseX - 0.5) * width;
+        const y = prev.y + dy * t + (noiseY - 0.5) * width;
         ctx.fillRect(x, y, 1, 1);
+        grainIndex++;
       }
     }
     ctx.globalAlpha = stroke.opacity ?? 1;
+  }
+
+  _hashString(value) {
+    let hash = 2166136261;
+    const text = String(value);
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+
+  _noise(seed) {
+    let value = seed >>> 0;
+    value ^= value >>> 16;
+    value = Math.imul(value, 2246822507);
+    value ^= value >>> 13;
+    value = Math.imul(value, 3266489909);
+    value ^= value >>> 16;
+    return (value >>> 0) / 4294967295;
   }
 
   _drawRemoteCursors() {
@@ -873,6 +917,7 @@ export class DrawingEngine {
   }
 
   setStrokes(strokes) {
+    this.clearTransientStrokes();
     // Deduplicate by stroke ID to prevent double rendering
     const seen = new Set();
     this.strokes = strokes.filter((s) => {
@@ -949,6 +994,7 @@ export class DrawingEngine {
 
   clearStrokes() {
     this.strokes = [];
+    this.clearTransientStrokes();
   }
 
   updateRemoteCursor(userId, { x, y, name, color }) {
@@ -963,11 +1009,46 @@ export class DrawingEngine {
     this.transform = { x: 0, y: 0, scale: 1 };
   }
 
+  clearTransientStrokes() {
+    this.cancelActiveStroke();
+    if (this._remoteStrokes) {
+      const remoteIds = new Set([...this._remoteStrokes.values()].map((stroke) => stroke.id));
+      this.strokes = this.strokes.filter((stroke) => !remoteIds.has(stroke.id));
+      this._remoteStrokes.clear();
+    }
+  }
+
+  removeRemoteUserStrokes(userId) {
+    if (!this._remoteStrokes) return;
+    for (const [key, stroke] of this._remoteStrokes.entries()) {
+      if (stroke.userId === userId) {
+        this.strokes = this.strokes.filter((s) => s.id !== stroke.id);
+        this._remoteStrokes.delete(key);
+      }
+    }
+  }
+
+  _pruneStaleRemoteStrokes() {
+    if (!this._remoteStrokes) return;
+    const now = Date.now();
+    for (const [key, stroke] of this._remoteStrokes.entries()) {
+      if (now - stroke.lastUpdated > 10000) {
+        this.strokes = this.strokes.filter((s) => s.id !== stroke.id);
+        this._remoteStrokes.delete(key);
+      }
+    }
+  }
+
   // Handle remote stroke events for live drawing
   handleRemoteStrokeStart(data) {
     // Start building a remote stroke
     if (!this._remoteStrokes) this._remoteStrokes = new Map();
-    this._remoteStrokes.set(data.userId, {
+    const key = data.id || data.userId;
+    const previous = this._remoteStrokes.get(key);
+    if (previous) {
+      this.strokes = this.strokes.filter((s) => s.id !== previous.id);
+    }
+    this._remoteStrokes.set(key, {
       id: data.id,
       tool: data.tool,
       color: data.color,
@@ -975,27 +1056,32 @@ export class DrawingEngine {
       opacity: data.opacity,
       points: [data.point],
       layer: data.layer,
+      userId: data.userId,
+      lastUpdated: Date.now(),
     });
     // Add to strokes for live rendering
-    this.strokes.push(this._remoteStrokes.get(data.userId));
+    this.strokes.push(this._remoteStrokes.get(key));
   }
 
   handleRemoteStrokeMove(data) {
     if (!this._remoteStrokes) return;
-    const stroke = this._remoteStrokes.get(data.userId);
+    const key = data.id || data.userId;
+    const stroke = this._remoteStrokes.get(key);
     if (stroke) {
       stroke.points.push(data.point);
+      stroke.lastUpdated = Date.now();
     }
   }
 
   handleRemoteStrokeEnd(data) {
     if (!this._remoteStrokes) return;
-    const existing = this._remoteStrokes.get(data.userId);
+    const key = data.id || data.userId;
+    const existing = this._remoteStrokes.get(key);
     if (existing) {
       // Remove the live-building stroke
       this.strokes = this.strokes.filter((s) => s.id !== existing.id);
     }
-    this._remoteStrokes.delete(data.userId);
+    this._remoteStrokes.delete(key);
     // Add the final stroke (skip if already present, e.g. from setStrokes)
     if (data.tool !== 'eraser' && !this.strokes.some((s) => s.id === data.id)) {
       this.strokes.push(data);
