@@ -5,6 +5,7 @@
 import { DrawingEngine } from './drawing-engine.js';
 import { CollaborationManager } from './collaboration.js';
 import { PDFViewer } from './pdf-viewer.js';
+import { processAndUploadPDF, compressImage } from './pdf-processor.js';
 
 class CollabBoardApp {
   constructor() {
@@ -225,7 +226,8 @@ class CollabBoardApp {
     });
 
     this.collab.on('load-pdf', (data) => {
-      this._loadPDFFromUrl(data.url);
+      if (data.doc) this._loadPDFDoc(data.doc);
+      else this._loadPDFFromUrl(data.url);
     });
 
     this.collab.on('close-pdf', () => {
@@ -235,7 +237,8 @@ class CollabBoardApp {
 
     this.collab.on('pdf-page-change', (data) => {
       if (this.pdfViewer) {
-        this.pdfViewer.goToPage(data.page);
+        // silent: don't rebroadcast a change we just received from the server
+        this.pdfViewer.goToPage(data.page, { silent: true });
         if (data.strokes) {
           this.engine?.setStrokes(data.strokes);
         }
@@ -326,12 +329,16 @@ class CollabBoardApp {
       if (item.type === 'youtube') this._createYouTubeOverlay(item);
     }
 
-    if (response.room?.pdfUrl) {
+    if (response.room?.pdfDoc || response.room?.pdfUrl) {
       if (!this.pdfMode || !this.pdfViewer) {
-        await this._loadPDFFromUrl(response.room.pdfUrl, { silent: true });
+        if (response.room.pdfDoc) {
+          await this._loadPDFDoc(response.room.pdfDoc, { silent: true });
+        } else {
+          await this._loadPDFFromUrl(response.room.pdfUrl, { silent: true });
+        }
       }
       if (this.pdfViewer && response.room.pdfPage) {
-        this.pdfViewer.goToPage(response.room.pdfPage);
+        this.pdfViewer.goToPage(response.room.pdfPage, { silent: true });
       }
       this.pdfMode = true;
       this.engine.setLayer('pdf');
@@ -434,25 +441,70 @@ class CollabBoardApp {
 
   async _uploadPDF(e) {
     const file = e.target.files[0];
+    e.target.value = '';
     if (!file) return;
 
-    const formData = new FormData();
-    formData.append('pdf', file);
+    if (file.size > 30 * 1024 * 1024) {
+      this._showToast('PDF is too large (max 30MB)', 'error');
+      return;
+    }
 
+    // Convert the PDF into compressed page images locally and upload those,
+    // so collaborators stream lightweight bitmaps instead of the raw PDF.
+    this._showProgress('Optimizing PDF for real-time annotation…');
     try {
-      this._showToast('Uploading PDF...');
+      const doc = await processAndUploadPDF(file, {
+        onProgress: (done, total) =>
+          this._updateProgress(done / total, `Processing page ${done} of ${total}`),
+      });
+      this._hideProgress();
+      this.collab.sendLoadPDF({ doc, name: doc.name });
+      await this._loadPDFDoc(doc);
+      return;
+    } catch (err) {
+      console.error('PDF optimization failed, falling back to direct upload', err);
+      this._updateProgress(0, 'Uploading original PDF…');
+    }
+
+    // Fallback: upload the raw PDF and render it with pdf.js (legacy path)
+    try {
+      const formData = new FormData();
+      formData.append('pdf', file);
       const res = await fetch('/api/upload-pdf', { method: 'POST', body: formData });
       const data = await res.json();
+      this._hideProgress();
 
       if (data.url) {
         this.collab.sendLoadPDF({ url: data.url, name: data.originalname });
         await this._loadPDFFromUrl(data.url);
+      } else {
+        this._showToast(data.error || 'Failed to upload PDF', 'error');
       }
     } catch (err) {
+      this._hideProgress();
       this._showToast('Failed to upload PDF', 'error');
     }
+  }
 
-    e.target.value = '';
+  async _loadPDFDoc(doc, options = {}) {
+    this.pdfMode = true;
+    this.engine?.setLayer('pdf');
+    this.engine?.clearStrokes();
+
+    document.getElementById('pdf-controls').classList.remove('hidden');
+    document.getElementById('canvas-area').classList.add('pdf-active');
+
+    const container = document.getElementById('pdf-container');
+    container.classList.remove('hidden');
+
+    if (this.pdfViewer) this.pdfViewer.destroy();
+
+    this.pdfViewer = new PDFViewer(container, {
+      onPageChange: (page) => this.collab.sendPageChange(page),
+    });
+
+    await this.pdfViewer.loadDoc(doc);
+    if (!options.silent) this._showToast('PDF ready — annotate away!');
   }
 
   async _loadPDFFromUrl(url, options = {}) {
@@ -523,11 +575,14 @@ class CollabBoardApp {
   }
 
   async _uploadImageFile(file) {
-    const formData = new FormData();
-    formData.append('image', file);
-
     try {
-      this._showToast('Uploading image...');
+      this._showToast('Optimizing image...');
+      // Downscale & re-encode locally so the board stays light for everyone
+      const optimized = await compressImage(file);
+
+      const formData = new FormData();
+      formData.append('image', optimized, optimized.name || 'image');
+
       const res = await fetch('/api/upload-image', { method: 'POST', body: formData });
       const data = await res.json();
 
@@ -1128,7 +1183,7 @@ class CollabBoardApp {
                </svg>
              </div>`
         }
-        ${jam.pdfUrl ? '<span class="jam-card-pdf-badge">PDF</span>' : ''}
+        ${jam.pdfUrl || jam.hasPdf ? '<span class="jam-card-pdf-badge">PDF</span>' : ''}
       </div>
       <div class="jam-card-info">
         <div class="jam-card-title">${this._escapeHtml(jam.title)}</div>
@@ -1267,6 +1322,28 @@ class CollabBoardApp {
       slider.value = Math.min(50, parseInt(slider.value) + 1);
       slider.dispatchEvent(new Event('input'));
     }
+  }
+
+  // ============================
+  // Progress overlay
+  // ============================
+
+  _showProgress(label) {
+    const overlay = document.getElementById('progress-overlay');
+    overlay.classList.remove('hidden');
+    document.getElementById('progress-label').textContent = label;
+    document.getElementById('progress-fill').style.width = '0%';
+    document.getElementById('progress-detail').textContent = '';
+  }
+
+  _updateProgress(fraction, detail) {
+    document.getElementById('progress-fill').style.width =
+      `${Math.max(0, Math.min(100, Math.round(fraction * 100)))}%`;
+    if (detail) document.getElementById('progress-detail').textContent = detail;
+  }
+
+  _hideProgress() {
+    document.getElementById('progress-overlay').classList.add('hidden');
   }
 
   _showToast(message, type = 'info') {

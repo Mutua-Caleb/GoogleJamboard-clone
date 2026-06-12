@@ -54,6 +54,7 @@ function listJams() {
         updatedAt: data.updatedAt,
         strokeCount: data.strokes?.length || 0,
         pdfUrl: data.pdfUrl || null,
+        hasPdf: !!(data.pdfUrl || data.pdfDoc),
         thumbnail: data.thumbnail || null,
       });
     } catch { /* skip corrupt files */ }
@@ -84,6 +85,7 @@ function roomToJam(room, title) {
     textItems: room.textItems || [],
     media: room.media || [],
     pdfUrl: room.pdfUrl,
+    pdfDoc: room.pdfDoc || null,
     pdfPage: room.pdfPage,
     pages: pagesObj,
     thumbnail: room.thumbnail || null,
@@ -140,12 +142,42 @@ const imageUpload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
 });
 
+// Pre-rendered PDF page images, one folder per document
+const PDFDOCS_DIR = path.join(__dirname, '..', 'uploads', 'pdfdocs');
+const DOC_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const PAGE_NAME_RE = /^page-(\d{1,4})\.(jpg|jpeg|png|webp)$/;
+
+const pageStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    if (!DOC_ID_RE.test(req.params.id)) return cb(new Error('Invalid document id'));
+    const dir = path.join(PDFDOCS_DIR, req.params.id);
+    if (!fs.existsSync(dir)) return cb(new Error('Unknown document'));
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    if (!PAGE_NAME_RE.test(file.originalname)) return cb(new Error('Invalid page filename'));
+    cb(null, file.originalname);
+  },
+});
+const pageUpload = multer({
+  storage: pageStorage,
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed'));
+  },
+  limits: { fileSize: 8 * 1024 * 1024, files: 12 },
+});
+
 // Serve static files in production
 const distPath = path.join(__dirname, '..', 'dist');
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
 }
-app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+// Uploaded filenames are content-unique (uuid-based), so cache aggressively
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads'), {
+  maxAge: '30d',
+  immutable: true,
+}));
 
 // ============================
 // REST API
@@ -168,6 +200,24 @@ app.post('/api/upload-image', imageUpload.single('image'), (req, res) => {
     filename: req.file.filename,
     originalname: req.file.originalname,
     url: `/uploads/${req.file.filename}`,
+  });
+});
+
+// Reserve a folder for a pre-rendered PDF document
+app.post('/api/pdf-docs', (req, res) => {
+  const id = uuidv4();
+  fs.mkdirSync(path.join(PDFDOCS_DIR, id), { recursive: true });
+  res.json({ id });
+});
+
+// Receive a batch of pre-rendered page images for a document
+app.post('/api/pdf-docs/:id/pages', pageUpload.array('pages', 12), (req, res) => {
+  if (!req.files?.length) return res.status(400).json({ error: 'No pages uploaded' });
+  res.json({
+    files: req.files.map((f) => ({
+      page: parseInt(f.filename.match(PAGE_NAME_RE)[1], 10),
+      url: `/uploads/pdfdocs/${req.params.id}/${f.filename}`,
+    })),
   });
 });
 
@@ -209,6 +259,12 @@ app.post('/api/jams/:id/thumbnail', (req, res) => {
   res.json({ success: true });
 });
 
+// JSON errors for upload failures (multer throws on size/type/name violations)
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  res.status(err.status || 400).json({ error: err.message || 'Request failed' });
+});
+
 // ============================
 // Room helpers
 // ============================
@@ -225,6 +281,7 @@ function createRoom(hostId, hostName) {
     textItems: [],
     media: [],  // images & youtube embeds
     pdfUrl: null,
+    pdfDoc: null, // pre-rendered page-image document
     pdfPage: 1,
     pages: new Map(),
     // Persistence fields
@@ -258,6 +315,7 @@ function createRoomFromJam(hostId, jam) {
     textItems: jam.textItems || [],
     media: jam.media || [],
     pdfUrl: jam.pdfUrl || null,
+    pdfDoc: jam.pdfDoc || null,
     pdfPage: jam.pdfPage || 1,
     pages: pagesMap,
     // Persistence
@@ -280,6 +338,7 @@ function getRoomInfo(room) {
     host: room.host,
     users,
     pdfUrl: room.pdfUrl,
+    pdfDoc: room.pdfDoc || null,
     pdfPage: room.pdfPage,
     jamId: room.jamId,
     title: room.title,
@@ -330,7 +389,7 @@ function getRoomState(room) {
     strokes: room.strokes,
     textItems: room.textItems || [],
     media: room.media || [],
-    pdfStrokes: room.pdfUrl ? (room.pages.get(room.pdfPage) || []) : [],
+    pdfStrokes: (room.pdfUrl || room.pdfDoc) ? (room.pages.get(room.pdfPage) || []) : [],
   };
 }
 
@@ -417,7 +476,7 @@ io.on('connection', (socket) => {
 
     const strokeData = { ...data, userId: socket.id, clientId: currentClientId };
 
-    if (room.pdfUrl && data.layer === 'pdf') {
+    if ((room.pdfUrl || room.pdfDoc) && data.layer === 'pdf') {
       const page = room.pdfPage;
       if (!room.pages.has(page)) room.pages.set(page, []);
       room.pages.get(page).push(strokeData);
@@ -435,7 +494,7 @@ io.on('connection', (socket) => {
     const room = rooms.get(currentRoom);
     if (!room) return;
 
-    if (room.pdfUrl && data.layer === 'pdf') {
+    if ((room.pdfUrl || room.pdfDoc) && data.layer === 'pdf') {
       const page = room.pdfPage;
       const strokes = room.pages.get(page) || [];
       room.pages.set(
@@ -530,7 +589,8 @@ io.on('connection', (socket) => {
     if (!currentRoom) return;
     const room = rooms.get(currentRoom);
     if (!room) return;
-    room.pdfUrl = data.url;
+    room.pdfUrl = data.url || null;
+    room.pdfDoc = data.doc || null;
     room.pdfPage = 1;
     socket.to(currentRoom).emit('load-pdf', data);
     scheduleAutoSave(currentRoom);
@@ -541,6 +601,7 @@ io.on('connection', (socket) => {
     const room = rooms.get(currentRoom);
     if (!room) return;
     room.pdfUrl = null;
+    room.pdfDoc = null;
     room.pdfPage = 1;
     socket.to(currentRoom).emit('close-pdf');
     scheduleAutoSave(currentRoom);
@@ -588,7 +649,7 @@ io.on('connection', (socket) => {
     }
     io.to(currentRoom).emit('sync-strokes', {
       strokes: room.strokes,
-      pdfStrokes: room.pdfUrl ? (room.pages.get(room.pdfPage) || []) : [],
+      pdfStrokes: (room.pdfUrl || room.pdfDoc) ? (room.pages.get(room.pdfPage) || []) : [],
     });
     scheduleAutoSave(currentRoom);
   });
