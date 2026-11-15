@@ -11,6 +11,7 @@ export class DrawingEngine {
 
     // State
     this.isDrawing = false;
+    this.isSpacePressed = false;
     this.currentStroke = null;
     this.activePointerId = null;
     this.tool = 'pen';        // pen | pencil | eraser | highlighter
@@ -91,6 +92,21 @@ export class DrawingEngine {
 
     // Context menu disable
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // Spacebar pan
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        this.isSpacePressed = true;
+        if (!this.isPanning) this.canvas.style.cursor = 'grab';
+      }
+    });
+    window.addEventListener('keyup', (e) => {
+      if (e.code === 'Space') {
+        this.isSpacePressed = false;
+        if (!this.isPanning) this.canvas.style.cursor = '';
+      }
+    });
   }
 
   _getCanvasPoint(e) {
@@ -103,7 +119,7 @@ export class DrawingEngine {
 
   _onPointerDown(e) {
     // Middle mouse button or space+click for panning
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    if (e.button === 1 || (e.button === 0 && (e.altKey || this.isSpacePressed))) {
       this.isPanning = true;
       this.panStart = { x: e.clientX - this.transform.x, y: e.clientY - this.transform.y };
       this.canvas.style.cursor = 'grabbing';
@@ -217,16 +233,25 @@ export class DrawingEngine {
 
   _onWheel(e) {
     e.preventDefault();
-    const scaleFactor = e.deltaY > 0 ? 0.95 : 1.05;
-    const rect = this.canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
 
-    const newScale = Math.max(0.1, Math.min(5, this.transform.scale * scaleFactor));
-    const ratio = newScale / this.transform.scale;
-    this.transform.x = mx - ratio * (mx - this.transform.x);
-    this.transform.y = my - ratio * (my - this.transform.y);
-    this.transform.scale = newScale;
+    if (e.ctrlKey || e.metaKey) {
+      const zoomFactor = Math.exp(-e.deltaY * 0.002);
+      const rect = this.canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+
+      const newScale = Math.max(0.1, Math.min(5, this.transform.scale * zoomFactor));
+      const ratio = newScale / this.transform.scale;
+      this.transform.x = mx - ratio * (mx - this.transform.x);
+      this.transform.y = my - ratio * (my - this.transform.y);
+      this.transform.scale = newScale;
+    } else {
+      const dx = e.shiftKey && e.deltaX === 0 ? e.deltaY : e.deltaX;
+      const dy = e.shiftKey && e.deltaX === 0 ? 0 : e.deltaY;
+      this.transform.x -= dx;
+      this.transform.y -= dy;
+    }
+
     this._notifyViewportChange();
   }
 
@@ -333,12 +358,13 @@ export class DrawingEngine {
 
   _getContentBounds() {
     // Compute bounding box of all stroke points, with padding
-    const PADDING = 200;
+    const PADDING = Math.max(this.canvas.clientHeight || 800, 1200);
     const viewW = this.canvas.clientWidth;
     const viewH = this.canvas.clientHeight;
+    const vp = this._getViewportRect();
 
-    // Default content area: at least the visible viewport at identity transform
-    let minX = 0, minY = 0, maxX = viewW, maxY = viewH;
+    // Default content area: at least the visible viewport at identity transform and current viewport
+    let minX = Math.min(0, vp.x), minY = Math.min(0, vp.y), maxX = Math.max(viewW, vp.x + vp.width), maxY = Math.max(viewH, vp.y + vp.height);
 
     for (const stroke of this.strokes) {
       if (!stroke.points) continue;
@@ -367,6 +393,15 @@ export class DrawingEngine {
       const estHeight = item.fontSize * 1.2 * lines.length;
       if (item.x + estWidth > maxX) maxX = item.x + estWidth;
       if (item.y + estHeight > maxY) maxY = item.y + estHeight;
+    }
+
+    for (const item of this.mediaItems) {
+      if (item.type === 'image') {
+        if (item.x < minX) minX = item.x;
+        if (item.y < minY) minY = item.y;
+        if (item.x + item.width > maxX) maxX = item.x + item.width;
+        if (item.y + item.height > maxY) maxY = item.y + item.height;
+      }
     }
 
     return {
@@ -522,9 +557,11 @@ export class DrawingEngine {
     const { canvas, ctx } = this;
     const dpr = window.devicePixelRatio || 1;
 
-    if (canvas.width !== canvas.clientWidth * dpr || canvas.height !== canvas.clientHeight * dpr) {
-      canvas.width = canvas.clientWidth * dpr;
-      canvas.height = canvas.clientHeight * dpr;
+    const targetW = Math.round(canvas.clientWidth * dpr);
+    const targetH = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
     }
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -539,6 +576,8 @@ export class DrawingEngine {
       this.transform.x * dpr,
       this.transform.y * dpr
     );
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
 
     // Draw cursive practice guides (underneath everything so user traces on top)
     this._drawCursivePractices();
@@ -971,7 +1010,9 @@ export class DrawingEngine {
         if (img && img.complete && img.naturalWidth) {
           ctx.save();
           ctx.globalAlpha = 1;
-          ctx.drawImage(img, item.x, item.y, item.width, item.height);
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, Math.round(item.x), Math.round(item.y), Math.round(item.width), Math.round(item.height));
           ctx.restore();
         }
       }
