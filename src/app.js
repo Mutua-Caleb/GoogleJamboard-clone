@@ -372,6 +372,8 @@ class CollabBoardApp {
       onAddText: (data) => this.collab.sendAddText(data),
       onRemoveText: (data) => this.collab.sendRemoveText(data),
       onUpdateText: (data) => this.collab.sendUpdateText(data),
+      onMoveMedia: (data) => this.collab.sendMoveMedia(data),
+      onRemoveMedia: (id) => this.collab.sendRemoveMedia(id),
     });
 
     this._selectTool('pen');
@@ -537,19 +539,22 @@ class CollabBoardApp {
         img.src = data.url;
         await new Promise((resolve) => { img.onload = resolve; img.onerror = resolve; });
 
-        const maxSize = 400;
-        let width = img.naturalWidth || 400;
-        let height = img.naturalHeight || 300;
-        if (width > maxSize || height > maxSize) {
-          const ratio = Math.min(maxSize / width, maxSize / height);
+        const dpr = window.devicePixelRatio || 1;
+        const vp = this.engine?._getViewportRect();
+        let width = Math.round((img.naturalWidth || 800) / dpr);
+        let height = Math.round((img.naturalHeight || 600) / dpr);
+
+        const maxW = vp ? Math.min(1200, Math.round(vp.width * 0.75)) : 900;
+        const maxH = vp ? Math.min(1200, Math.round(vp.height * 0.75)) : 700;
+        if (width > maxW || height > maxH) {
+          const ratio = Math.min(maxW / width, maxH / height);
           width = Math.round(width * ratio);
           height = Math.round(height * ratio);
         }
 
-        // Place at center of current viewport
-        const vp = this.engine?._getViewportRect();
-        const x = vp ? vp.x + (vp.width - width) / 2 : 100;
-        const y = vp ? vp.y + (vp.height - height) / 2 : 100;
+        // Place at center of current viewport with integer coordinates
+        const x = vp ? Math.round(vp.x + (vp.width - width) / 2) : 100;
+        const y = vp ? Math.round(vp.y + (vp.height - height) / 2) : 100;
 
         const mediaItem = {
           id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
