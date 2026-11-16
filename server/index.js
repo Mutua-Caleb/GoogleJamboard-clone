@@ -489,8 +489,9 @@ io.on('connection', (socket) => {
     if (!currentRoom) return;
     const room = rooms.get(currentRoom);
     if (!room) return;
-    room.textItems.push(data);
-    socket.to(currentRoom).emit('add-text', data);
+    const textData = { ...data, userId: socket.id, clientId: currentClientId, createdAt: Date.now() };
+    room.textItems.push(textData);
+    socket.to(currentRoom).emit('add-text', textData);
     scheduleAutoSave(currentRoom);
   });
 
@@ -577,17 +578,28 @@ io.on('connection', (socket) => {
     const room = rooms.get(currentRoom);
     if (!room) return;
 
+    const isOwner = (item) => item.userId === socket.id || (currentClientId && item.clientId === currentClientId);
+
     if (data?.layer === 'pdf') {
       const page = room.pdfPage;
       const strokes = room.pages.get(page) || [];
-      const idx = strokes.findLastIndex((s) => s.userId === socket.id || (currentClientId && s.clientId === currentClientId));
+      const idx = strokes.findLastIndex(isOwner);
       if (idx !== -1) strokes.splice(idx, 1);
     } else {
-      const idx = room.strokes.findLastIndex((s) => s.userId === socket.id || (currentClientId && s.clientId === currentClientId));
-      if (idx !== -1) room.strokes.splice(idx, 1);
+      const strokeIdx = room.strokes.findLastIndex(isOwner);
+      const textIdx = (room.textItems || []).findLastIndex(isOwner);
+      const lastStrokeTime = strokeIdx !== -1 ? (room.strokes[strokeIdx].createdAt || parseInt(room.strokes[strokeIdx].id) || 0) : -1;
+      const lastTextTime = textIdx !== -1 ? (room.textItems[textIdx].createdAt || 0) : -1;
+
+      if (textIdx !== -1 && lastTextTime >= lastStrokeTime) {
+        room.textItems.splice(textIdx, 1);
+      } else if (strokeIdx !== -1) {
+        room.strokes.splice(strokeIdx, 1);
+      }
     }
     io.to(currentRoom).emit('sync-strokes', {
       strokes: room.strokes,
+      textItems: room.textItems || [],
       pdfStrokes: room.pdfUrl ? (room.pages.get(room.pdfPage) || []) : [],
     });
     scheduleAutoSave(currentRoom);

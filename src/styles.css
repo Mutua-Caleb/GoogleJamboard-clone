@@ -1011,29 +1011,50 @@ body {
 }
 
 /* ============================
+   Fullscreen Mode
+   ============================ */
+
+.board.fullscreen-mode .topbar {
+  display: none;
+}
+
+.board.fullscreen-mode .toolbar {
+  top: 0;
+}
+
+.board.fullscreen-mode .canvas-area {
+  top: 0;
+}
+
+/* ============================
    Text Input Overlay
    ============================ */
 
 .canvas-text-input {
   position: fixed;
-  background: transparent;
-  border: 1px dashed rgba(124, 58, 237, 0.6);
-  border-radius: 2px;
+  background: rgba(22, 33, 62, 0.75);
+  border: 1.5px dashed rgba(124, 58, 237, 0.85);
+  border-radius: 4px;
   outline: none;
-  padding: 4px 6px;
+  padding: 2px 4px;
+  margin: 0;
   resize: none;
   overflow: hidden;
   line-height: 1.2;
-  z-index: 100;
-  caret-color: var(--accent);
+  z-index: 150;
+  caret-color: #FFFFFF;
   font-weight: 500;
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.canvas-text-input::placeholder {
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .canvas-text-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.3);
+  box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.35), 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
 /* ============================

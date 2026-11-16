@@ -503,17 +503,80 @@ class CollabBoardApp {
 
   async _handlePaste(e) {
     if (!this.inRoom) return;
-    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
-    const items = e.clipboardData?.items;
-    if (!items) return;
+    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.target.isContentEditable) return;
 
-    for (const item of items) {
-      if (item.type.startsWith('image/')) {
+    this._lastPasteEventTime = Date.now();
+    const clipboardData = e.clipboardData;
+    if (!clipboardData) return;
+
+    // 1. Check clipboardData.items for image blobs or files
+    if (clipboardData.items) {
+      for (const item of clipboardData.items) {
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            await this._uploadImageFile(file);
+            return;
+          }
+        }
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file && (file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.name || ''))) {
+            e.preventDefault();
+            await this._uploadImageFile(file);
+            return;
+          }
+        }
+      }
+    }
+
+    // 2. Check clipboardData.files (e.g. copied image file from Explorer/Finder)
+    if (clipboardData.files && clipboardData.files.length > 0) {
+      for (const file of clipboardData.files) {
+        if (file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.name || '')) {
+          e.preventDefault();
+          await this._uploadImageFile(file);
+          return;
+        }
+      }
+    }
+
+    // 3. Check HTML clipboard for <img src="...">
+    const html = clipboardData.getData?.('text/html');
+    if (html) {
+      const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+      if (match && match[1]) {
         e.preventDefault();
-        const file = item.getAsFile();
-        await this._uploadImageFile(file);
+        await this._addImageFromUrl(match[1]);
         return;
       }
+    }
+
+    // 4. Check plain text for data:image/... URL
+    const text = clipboardData.getData?.('text/plain')?.trim();
+    if (text && text.startsWith('data:image/')) {
+      e.preventDefault();
+      await this._addImageFromUrl(text);
+    }
+  }
+
+  async _pasteFromClipboardApi() {
+    if (!this.inRoom || !navigator.clipboard?.read) return;
+    try {
+      const clipboardItems = await navigator.clipboard.read();
+      for (const item of clipboardItems) {
+        const imageType = item.types.find((t) => t.startsWith('image/'));
+        if (imageType) {
+          const blob = await item.getType(imageType);
+          const ext = imageType.split('/')[1] || 'png';
+          const file = new File([blob], `pasted-image.${ext}`, { type: imageType });
+          await this._uploadImageFile(file);
+          return;
+        }
+      }
+    } catch {
+      // Clipboard API permission not granted or no image in clipboard
     }
   }
 
@@ -524,51 +587,93 @@ class CollabBoardApp {
     e.target.value = '';
   }
 
+  _fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
   async _uploadImageFile(file) {
     const formData = new FormData();
-    formData.append('image', file);
+    const filename = file.name || `pasted-image-${Date.now()}.png`;
+    formData.append('image', file, filename);
 
+    let imageUrl = null;
     try {
-      this._showToast('Uploading image...');
+      this._showToast('Adding image...');
       const res = await fetch('/api/upload-image', { method: 'POST', body: formData });
-      const data = await res.json();
-
-      if (data.url) {
-        // Get image dimensions to size it on canvas
-        const img = new Image();
-        img.src = data.url;
-        await new Promise((resolve) => { img.onload = resolve; img.onerror = resolve; });
-
-        const dpr = window.devicePixelRatio || 1;
-        const vp = this.engine?._getViewportRect();
-        let width = Math.round((img.naturalWidth || 800) / dpr);
-        let height = Math.round((img.naturalHeight || 600) / dpr);
-
-        const maxW = vp ? Math.min(1200, Math.round(vp.width * 0.75)) : 900;
-        const maxH = vp ? Math.min(1200, Math.round(vp.height * 0.75)) : 700;
-        if (width > maxW || height > maxH) {
-          const ratio = Math.min(maxW / width, maxH / height);
-          width = Math.round(width * ratio);
-          height = Math.round(height * ratio);
-        }
-
-        // Place at center of current viewport with integer coordinates
-        const x = vp ? Math.round(vp.x + (vp.width - width) / 2) : 100;
-        const y = vp ? Math.round(vp.y + (vp.height - height) / 2) : 100;
-
-        const mediaItem = {
-          id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          type: 'image',
-          url: data.url,
-          x, y, width, height,
-        };
-
-        this.engine?.addMedia(mediaItem);
-        this.collab.sendAddMedia(mediaItem);
-        this._showToast('Image added');
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.url) imageUrl = data.url;
       }
     } catch {
-      this._showToast('Failed to upload image', 'error');
+      // Fallback to data URL below
+    }
+
+    if (!imageUrl) {
+      try {
+        imageUrl = await this._fileToDataUrl(file);
+      } catch {
+        this._showToast('Failed to load pasted image', 'error');
+        return;
+      }
+    }
+
+    await this._addImageFromUrl(imageUrl);
+  }
+
+  async _addImageFromUrl(url) {
+    try {
+      const img = new Image();
+      img.src = url;
+      await new Promise((resolve) => { img.onload = resolve; img.onerror = resolve; });
+
+      const dpr = window.devicePixelRatio || 1;
+      const vp = this.engine?._getViewportRect();
+      let width = Math.round((img.naturalWidth || 800) / dpr);
+      let height = Math.round((img.naturalHeight || 600) / dpr);
+
+      const maxW = vp ? Math.min(1200, Math.round(vp.width * 0.75)) : 900;
+      const maxH = vp ? Math.min(1200, Math.round(vp.height * 0.75)) : 700;
+      if (width > maxW || height > maxH) {
+        const ratio = Math.min(maxW / width, maxH / height);
+        width = Math.round(width * ratio);
+        height = Math.round(height * ratio);
+      }
+
+      // Place at cursor position if inside viewport, otherwise center of viewport
+      const cursor = this.engine?.lastCursorPoint;
+      let x, y;
+      if (
+        cursor &&
+        vp &&
+        cursor.x >= vp.x &&
+        cursor.x <= vp.x + vp.width &&
+        cursor.y >= vp.y &&
+        cursor.y <= vp.y + vp.height
+      ) {
+        x = Math.round(cursor.x - width / 2);
+        y = Math.round(cursor.y - height / 2);
+      } else {
+        x = vp ? Math.round(vp.x + (vp.width - width) / 2) : 100;
+        y = vp ? Math.round(vp.y + (vp.height - height) / 2) : 100;
+      }
+
+      const mediaItem = {
+        id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        type: 'image',
+        url,
+        x, y, width, height,
+      };
+
+      this.engine?.addMedia(mediaItem);
+      this.collab.sendAddMedia(mediaItem);
+      this._showToast('Image added');
+    } catch {
+      this._showToast('Failed to add image', 'error');
     }
   }
 
@@ -1245,22 +1350,85 @@ class CollabBoardApp {
     });
   }
 
+  async _toggleFullscreen() {
+    const isCurrentlyFullscreen = Boolean(document.fullscreenElement) || this.boardEl.classList.contains('fullscreen-mode');
+    if (!isCurrentlyFullscreen) {
+      this._setFullscreenState(true);
+      try {
+        if (document.documentElement.requestFullscreen) {
+          await document.documentElement.requestFullscreen();
+        }
+      } catch {
+        // Keep board UI fullscreen even if browser Fullscreen API is blocked
+      }
+    } else {
+      this._setFullscreenState(false);
+      try {
+        if (document.fullscreenElement && document.exitFullscreen) {
+          await document.exitFullscreen();
+        }
+      } catch {
+        // Ignore
+      }
+    }
+  }
+
+  _onBrowserFullscreenChange() {
+    const isBrowserFs = Boolean(document.fullscreenElement);
+    this._setFullscreenState(isBrowserFs);
+  }
+
+  _setFullscreenState(active) {
+    this.boardEl.classList.toggle('fullscreen-mode', active);
+    document.querySelectorAll('.icon-fs-enter').forEach((el) => el.classList.toggle('hidden', active));
+    document.querySelectorAll('.icon-fs-exit').forEach((el) => el.classList.toggle('hidden', !active));
+    this.engine?._updateActiveTextInputPosition?.();
+  }
+
   _handleKeyboard(e) {
     if (!this.inRoom) return;
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+
+    if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      this._undo();
+      return;
+    }
+    if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      this._saveNow();
+      return;
+    }
+    if ((e.key === 'v' || e.key === 'V') && (e.ctrlKey || e.metaKey)) {
+      // Allow native paste event to fire first; fallback to Clipboard API if needed
+      setTimeout(() => {
+        if (Date.now() - (this._lastPasteEventTime || 0) > 120) {
+          this._pasteFromClipboardApi();
+        }
+      }, 80);
+      return;
+    }
+
+    if (e.key === 'Escape' && this.boardEl.classList.contains('fullscreen-mode') && !document.fullscreenElement) {
+      this._setFullscreenState(false);
+      return;
+    }
+
+    // When the Text tool is active, typing any printable character writes directly on the board
+    if (this.engine?.tool === 'text' && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && e.code !== 'Space') {
+      e.preventDefault();
+      this.engine.startTypingWithChar(e.key);
+      return;
+    }
 
     if (e.key === 'p' || e.key === '1') this._selectTool('pen');
     else if (e.key === 'l' || e.key === '2') this._selectTool('pencil');
     else if (e.key === 'h' || e.key === '3') this._selectTool('highlighter');
     else if (e.key === 'e' || e.key === '4') this._selectTool('eraser');
     else if (e.key === 't' || e.key === '5') this._selectTool('text');
-    else if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
+    else if (e.key === 'f' || e.key === 'F') {
       e.preventDefault();
-      this._undo();
-    }
-    else if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      this._saveNow();
+      this._toggleFullscreen();
     }
     else if (e.key === '[') {
       const slider = document.getElementById('size-slider');

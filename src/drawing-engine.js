@@ -4,21 +4,22 @@
  */
 
 export class DrawingEngine {
-  constructor(canvas, { onStrokeStart, onStrokeMove, onStrokeEnd, onErase, onCursorMove, onViewportChange, onAddText, onRemoveText, onUpdateText }) {
+  constructor(canvas, { onStrokeStart, onStrokeMove, onStrokeEnd, onErase, onCursorMove, onViewportChange, onAddText, onRemoveText, onUpdateText, onMoveMedia, onRemoveMedia }) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.callbacks = { onStrokeStart, onStrokeMove, onStrokeEnd, onErase, onCursorMove, onViewportChange, onAddText, onRemoveText, onUpdateText };
+    this.callbacks = { onStrokeStart, onStrokeMove, onStrokeEnd, onErase, onCursorMove, onViewportChange, onAddText, onRemoveText, onUpdateText, onMoveMedia, onRemoveMedia };
 
     // State
     this.isDrawing = false;
     this.isSpacePressed = false;
     this.currentStroke = null;
     this.activePointerId = null;
-    this.tool = 'pen';        // pen | pencil | eraser | highlighter
+    this.tool = 'pen';        // pen | pencil | eraser | highlighter | text
     this.color = '#FFFFFF';
     this.size = 3;
     this.opacity = 1;
     this.layer = 'whiteboard'; // whiteboard | pdf
+    this.lastCursorPoint = null;
 
     // All strokes stored locally for rendering
     this.strokes = [];
@@ -30,11 +31,12 @@ export class DrawingEngine {
 
     // Text items rendered on canvas
     this.textItems = [];
+    this._editingTextId = null;
 
     // Cursive practice guide items
     this.cursivePractices = [];
 
-    // Pan & zoom
+    // Pan (scale fixed at 1, zooming disabled)
     this.transform = { x: 0, y: 0, scale: 1 };
     this.isPanning = false;
     this.panStart = { x: 0, y: 0 };
@@ -87,7 +89,7 @@ export class DrawingEngine {
     this.canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
     this.canvas.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
 
-    // Zoom with wheel
+    // Pan with wheel (zooming disabled)
     this.canvas.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
 
     // Context menu disable
@@ -95,7 +97,7 @@ export class DrawingEngine {
 
     // Spacebar pan
     window.addEventListener('keydown', (e) => {
-      if (e.code === 'Space' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+      if (e.code === 'Space' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA' && !e.target.isContentEditable) {
         e.preventDefault();
         this.isSpacePressed = true;
         if (!this.isPanning) this.canvas.style.cursor = 'grab';
@@ -104,7 +106,7 @@ export class DrawingEngine {
     window.addEventListener('keyup', (e) => {
       if (e.code === 'Space') {
         this.isSpacePressed = false;
-        if (!this.isPanning) this.canvas.style.cursor = '';
+        if (!this.isPanning) this.canvas.style.cursor = this.tool === 'text' ? 'text' : 'crosshair';
       }
     });
   }
@@ -129,11 +131,25 @@ export class DrawingEngine {
     if (e.button !== 0) return;
 
     const point = this._getCanvasPoint(e);
+    this.lastCursorPoint = point;
 
-    // Text tool: open text input at click position
+    // Text tool: open text input at click position (or edit clicked text item)
     if (this.tool === 'text') {
-      this._openTextInput(point, e);
+      e.preventDefault();
+      e.stopPropagation();
+      this._commitTextInput();
+      const clickedText = this._findTextItemAt(point);
+      if (clickedText) {
+        this._openTextInput({ x: clickedText.x, y: clickedText.y }, { editingItem: clickedText });
+      } else {
+        this._openTextInput(point);
+      }
       return;
+    }
+
+    // If user clicks canvas with another tool while text input is open, commit it first
+    if (this._activeTextInput) {
+      this._commitTextInput();
     }
 
     const pressure = e.pressure !== undefined && e.pressure > 0 ? e.pressure : 0.5;
@@ -170,6 +186,7 @@ export class DrawingEngine {
 
   _onPointerMove(e) {
     const point = this._getCanvasPoint(e);
+    this.lastCursorPoint = point;
 
     // Cursor tracking
     this.callbacks.onCursorMove?.({ x: point.x, y: point.y });
@@ -177,6 +194,7 @@ export class DrawingEngine {
     if (this.isPanning) {
       this.transform.x = e.clientX - this.panStart.x;
       this.transform.y = e.clientY - this.panStart.y;
+      this._updateActiveTextInputPosition();
       this._notifyViewportChange();
       return;
     }
@@ -199,7 +217,7 @@ export class DrawingEngine {
   _onPointerUp(e) {
     if (this.isPanning) {
       this.isPanning = false;
-      this.canvas.style.cursor = '';
+      this.canvas.style.cursor = this.tool === 'text' ? 'text' : 'crosshair';
       return;
     }
 
@@ -228,30 +246,23 @@ export class DrawingEngine {
     this.isPanning = false;
     this.currentStroke = null;
     this.activePointerId = null;
-    this.canvas.style.cursor = '';
+    this.canvas.style.cursor = this.tool === 'text' ? 'text' : 'crosshair';
   }
 
   _onWheel(e) {
     e.preventDefault();
 
+    // Zooming is disabled; ignore pinch-to-zoom / Ctrl+wheel
     if (e.ctrlKey || e.metaKey) {
-      const zoomFactor = Math.exp(-e.deltaY * 0.002);
-      const rect = this.canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-
-      const newScale = Math.max(0.1, Math.min(5, this.transform.scale * zoomFactor));
-      const ratio = newScale / this.transform.scale;
-      this.transform.x = mx - ratio * (mx - this.transform.x);
-      this.transform.y = my - ratio * (my - this.transform.y);
-      this.transform.scale = newScale;
-    } else {
-      const dx = e.shiftKey && e.deltaX === 0 ? e.deltaY : e.deltaX;
-      const dy = e.shiftKey && e.deltaX === 0 ? 0 : e.deltaY;
-      this.transform.x -= dx;
-      this.transform.y -= dy;
+      return;
     }
 
+    const dx = e.shiftKey && e.deltaX === 0 ? e.deltaY : e.deltaX;
+    const dy = e.shiftKey && e.deltaX === 0 ? 0 : e.deltaY;
+    this.transform.x -= dx;
+    this.transform.y -= dy;
+
+    this._updateActiveTextInputPosition();
     this._notifyViewportChange();
   }
 
@@ -273,6 +284,25 @@ export class DrawingEngine {
     if (toErase.length > 0) {
       this.strokes = this.strokes.filter((s) => !toErase.includes(s.id));
       this.callbacks.onErase?.({ strokeIds: toErase, layer: this.layer });
+    }
+
+    // Also erase text items touched by the eraser
+    const textToErase = [];
+    this.textItems.forEach((item) => {
+      const bounds = this._getTextItemBounds(item);
+      if (
+        point.x + eraserRadius >= bounds.x &&
+        point.x - eraserRadius <= bounds.x + bounds.width &&
+        point.y + eraserRadius >= bounds.y &&
+        point.y - eraserRadius <= bounds.y + bounds.height
+      ) {
+        textToErase.push(item.id);
+      }
+    });
+
+    if (textToErase.length > 0) {
+      this.textItems = this.textItems.filter((t) => !textToErase.includes(t.id));
+      textToErase.forEach((id) => this.callbacks.onRemoveText?.({ id }));
     }
   }
 
@@ -792,94 +822,261 @@ export class DrawingEngine {
 
   // --- Text tool ---
 
-  _openTextInput(point, e) {
-    // Close any existing text input
-    this._closeTextInput();
+  _getTextItemBounds(item) {
+    const lines = (item.text || '').split('\n');
+    const fontSize = item.fontSize || 20;
+    this.ctx.save();
+    this.ctx.font = `500 ${fontSize}px Inter, system-ui, sans-serif`;
+    let maxWidth = 0;
+    for (const line of lines) {
+      const w = this.ctx.measureText(line).width;
+      if (w > maxWidth) maxWidth = w;
+    }
+    this.ctx.restore();
+    return {
+      x: item.x,
+      y: item.y,
+      width: Math.max(20, maxWidth),
+      height: Math.max(fontSize, lines.length * fontSize * 1.2),
+    };
+  }
 
+  _findTextItemAt(point) {
+    for (let i = this.textItems.length - 1; i >= 0; i--) {
+      const item = this.textItems[i];
+      const b = this._getTextItemBounds(item);
+      if (
+        point.x >= b.x - 6 &&
+        point.x <= b.x + b.width + 6 &&
+        point.y >= b.y - 6 &&
+        point.y <= b.y + b.height + 6
+      ) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  _updateActiveTextInputPosition() {
+    if (!this._activeTextInput || !this._activeTextPoint) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const screenX = this._activeTextPoint.x * this.transform.scale + this.transform.x + rect.left;
+    const screenY = this._activeTextPoint.y * this.transform.scale + this.transform.y + rect.top;
+    this._activeTextInput.style.left = `${Math.round(screenX)}px`;
+    this._activeTextInput.style.top = `${Math.round(screenY)}px`;
+  }
+
+  _resizeActiveTextInput() {
+    const input = this._activeTextInput;
+    if (!input) return;
+    const fontSize = (this._activeTextFontSize || 20) * this.transform.scale;
+    const lines = (input.value || input.placeholder || 'Type here...').split('\n');
+
+    this.ctx.save();
+    this.ctx.font = `500 ${fontSize}px Inter, system-ui, sans-serif`;
+    let maxW = 0;
+    for (const line of lines) {
+      const w = this.ctx.measureText(line || ' ').width;
+      if (w > maxW) maxW = w;
+    }
+    this.ctx.restore();
+
+    const width = Math.max(140, Math.ceil(maxW + 28));
+    const height = Math.max(Math.ceil(fontSize * 1.35), Math.ceil(lines.length * fontSize * 1.2 + 10));
+    input.style.width = `${width}px`;
+    input.style.height = `${height}px`;
+  }
+
+  startTypingWithChar(initialChar = '') {
+    if (this._activeTextInput) {
+      this._activeTextInput.focus();
+      if (initialChar) {
+        const start = this._activeTextInput.selectionStart ?? this._activeTextInput.value.length;
+        const end = this._activeTextInput.selectionEnd ?? this._activeTextInput.value.length;
+        const val = this._activeTextInput.value;
+        this._activeTextInput.value = val.slice(0, start) + initialChar + val.slice(end);
+        this._activeTextInput.selectionStart = this._activeTextInput.selectionEnd = start + initialChar.length;
+        this._resizeActiveTextInput();
+      }
+      return;
+    }
+
+    const vp = this._getViewportRect();
+    let point = this.lastCursorPoint;
+    if (
+      !point ||
+      point.x < vp.x ||
+      point.x > vp.x + vp.width ||
+      point.y < vp.y ||
+      point.y > vp.y + vp.height
+    ) {
+      point = {
+        x: Math.round(vp.x + vp.width * 0.35),
+        y: Math.round(vp.y + vp.height * 0.4),
+      };
+    }
+
+    this._openTextInput(point, { initialText: initialChar });
+  }
+
+  _openTextInput(point, options = {}) {
+    // Commit any existing text input before opening a new one
+    this._commitTextInput();
+
+    const { editingItem = null, initialText = '' } = options;
     const rect = this.canvas.getBoundingClientRect();
     const screenX = point.x * this.transform.scale + this.transform.x + rect.left;
     const screenY = point.y * this.transform.scale + this.transform.y + rect.top;
-    const fontSize = Math.max(14, this.size * 4);
+    const fontSize = editingItem ? editingItem.fontSize : Math.max(20, this.size * 5);
+    const textColor = editingItem ? editingItem.color : this.color;
 
     const input = document.createElement('textarea');
     input.className = 'canvas-text-input';
-    input.style.left = `${screenX}px`;
-    input.style.top = `${screenY}px`;
+    input.placeholder = 'Type here...';
+    input.style.left = `${Math.round(screenX)}px`;
+    input.style.top = `${Math.round(screenY)}px`;
     input.style.fontSize = `${fontSize * this.transform.scale}px`;
-    input.style.color = this.color;
+    input.style.color = textColor;
+    input.style.caretColor = textColor;
     input.style.fontFamily = 'Inter, system-ui, sans-serif';
-    input.style.minWidth = '60px';
-    input.style.minHeight = `${fontSize * this.transform.scale + 8}px`;
     input.rows = 1;
-
-    document.body.appendChild(input);
-    input.focus();
+    input.value = editingItem ? editingItem.text : initialText;
 
     this._activeTextInput = input;
-    this._activeTextPoint = point;
+    this._activeTextPoint = { x: Math.round(point.x), y: Math.round(point.y) };
     this._activeTextFontSize = fontSize;
+    this._activeTextColor = textColor;
+    this._editingTextItem = editingItem;
+    this._editingTextId = editingItem ? editingItem.id : null;
 
-    // Auto-resize
-    const autoResize = () => {
-      input.style.height = 'auto';
-      input.style.height = input.scrollHeight + 'px';
+    document.body.appendChild(input);
+    this._resizeActiveTextInput();
+
+    const focusInput = () => {
+      if (this._activeTextInput !== input) return;
+      input.focus();
+      const len = input.value.length;
+      input.setSelectionRange(len, len);
     };
-    input.addEventListener('input', autoResize);
 
-    // Commit on blur or Escape
-    const commit = () => {
-      const text = input.value.trim();
-      if (text) {
-        const textItem = {
-          id: `txt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          text,
-          x: point.x,
-          y: point.y,
-          color: this.color,
-          fontSize,
-          layer: this.layer,
-        };
-        this.textItems.push(textItem);
-        this.callbacks.onAddText?.(textItem);
+    focusInput();
+    let readyToCommit = false;
+    requestAnimationFrame(() => {
+      focusInput();
+      setTimeout(() => {
+        readyToCommit = true;
+      }, 60);
+    });
+
+    input.addEventListener('input', () => {
+      this._resizeActiveTextInput();
+    });
+
+    input.addEventListener('pointerdown', (ev) => {
+      ev.stopPropagation();
+    });
+
+    const onBlur = () => {
+      if (!readyToCommit) {
+        focusInput();
+        return;
       }
-      this._closeTextInput();
+      this._commitTextInput();
     };
 
-    input.addEventListener('blur', commit);
+    this._activeTextBlurHandler = onBlur;
+    input.addEventListener('blur', onBlur);
+
     input.addEventListener('keydown', (ev) => {
+      ev.stopPropagation();
       if (ev.key === 'Escape') {
-        input.removeEventListener('blur', commit);
-        this._closeTextInput();
-      }
-      // Shift+Enter for newline, Enter to commit
-      if (ev.key === 'Enter' && !ev.shiftKey) {
         ev.preventDefault();
-        input.removeEventListener('blur', commit);
-        commit();
+        this._commitTextInput();
+      } else if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) {
+        ev.preventDefault();
+        this._commitTextInput();
       }
     });
   }
 
+  _commitTextInput() {
+    if (!this._activeTextInput) return;
+
+    const input = this._activeTextInput;
+    if (this._activeTextBlurHandler) {
+      input.removeEventListener('blur', this._activeTextBlurHandler);
+      this._activeTextBlurHandler = null;
+    }
+
+    const rawText = input.value.replace(/\r\n/g, '\n');
+    const trimmed = rawText.trim();
+    const point = this._activeTextPoint;
+    const fontSize = this._activeTextFontSize || Math.max(20, this.size * 5);
+    const color = this._activeTextColor || this.color;
+    const editingItem = this._editingTextItem;
+
+    this._closeTextInput();
+
+    if (editingItem) {
+      if (trimmed) {
+        editingItem.text = rawText;
+        editingItem.color = color;
+        editingItem.fontSize = fontSize;
+        this.callbacks.onUpdateText?.({
+          id: editingItem.id,
+          text: editingItem.text,
+          x: editingItem.x,
+          y: editingItem.y,
+          color: editingItem.color,
+          fontSize: editingItem.fontSize,
+          layer: editingItem.layer,
+        });
+      } else {
+        this.textItems = this.textItems.filter((t) => t.id !== editingItem.id);
+        this.callbacks.onRemoveText?.({ id: editingItem.id });
+      }
+    } else if (trimmed) {
+      const textItem = {
+        id: `txt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        text: rawText,
+        x: point.x,
+        y: point.y,
+        color,
+        fontSize,
+        layer: this.layer,
+      };
+      this.textItems.push(textItem);
+      this.callbacks.onAddText?.(textItem);
+    }
+  }
+
   _closeTextInput() {
     if (this._activeTextInput) {
+      if (this._activeTextBlurHandler) {
+        this._activeTextInput.removeEventListener('blur', this._activeTextBlurHandler);
+        this._activeTextBlurHandler = null;
+      }
       this._activeTextInput.remove();
       this._activeTextInput = null;
       this._activeTextPoint = null;
+      this._editingTextItem = null;
+      this._editingTextId = null;
     }
   }
 
   _drawTextItems() {
     const { ctx } = this;
     for (const item of this.textItems) {
+      if (this._editingTextId && item.id === this._editingTextId) continue;
       ctx.save();
       ctx.fillStyle = item.color;
-      ctx.font = `${item.fontSize}px Inter, system-ui, sans-serif`;
+      ctx.font = `500 ${item.fontSize}px Inter, system-ui, sans-serif`;
       ctx.textBaseline = 'top';
 
       // Draw each line
       const lines = item.text.split('\n');
       for (let i = 0; i < lines.length; i++) {
-        ctx.fillText(lines[i], item.x, item.y + i * item.fontSize * 1.2);
+        ctx.fillText(lines[i], item.x + 4, item.y + 2 + i * item.fontSize * 1.2);
       }
       ctx.restore();
     }
@@ -940,15 +1137,31 @@ export class DrawingEngine {
   // --- Public API ---
 
   setTool(tool) {
+    if (this.tool === 'text' && tool !== 'text') {
+      this._commitTextInput();
+    }
     this.tool = tool;
   }
 
   setColor(color) {
     this.color = color;
+    if (this._activeTextInput) {
+      this._activeTextColor = color;
+      this._activeTextInput.style.color = color;
+      this._activeTextInput.style.caretColor = color;
+      this._activeTextInput.focus();
+    }
   }
 
   setSize(size) {
     this.size = size;
+    if (this._activeTextInput) {
+      const fontSize = Math.max(20, size * 5);
+      this._activeTextFontSize = fontSize;
+      this._activeTextInput.style.fontSize = `${fontSize * this.transform.scale}px`;
+      this._resizeActiveTextInput();
+      this._activeTextInput.focus();
+    }
   }
 
   setLayer(layer) {
