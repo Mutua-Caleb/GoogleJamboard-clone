@@ -36,9 +36,33 @@ function saveJam(jam) {
 }
 
 function loadJam(id) {
+  if (!id) return null;
   const filePath = path.join(JAMS_DIR, `${id}.json`);
   if (!fs.existsSync(filePath)) return null;
-  return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function findJamByRoomId(roomId) {
+  if (!roomId) return null;
+  const target = String(roomId).trim().toLowerCase();
+  const files = fs.readdirSync(JAMS_DIR).filter((f) => f.endsWith('.json'));
+  for (const file of files) {
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(JAMS_DIR, file), 'utf-8'));
+      if (
+        (data.roomId && data.roomId.toLowerCase() === target) ||
+        (data.id && data.id.toLowerCase() === target) ||
+        (data.id && data.id.slice(0, 8).toLowerCase() === target)
+      ) {
+        return data;
+      }
+    } catch { /* skip corrupt files */ }
+  }
+  return null;
 }
 
 function listJams() {
@@ -49,10 +73,13 @@ function listJams() {
       const data = JSON.parse(fs.readFileSync(path.join(JAMS_DIR, file), 'utf-8'));
       jams.push({
         id: data.id,
+        roomId: data.roomId || data.id.slice(0, 8),
         title: data.title,
         createdAt: data.createdAt,
         updatedAt: data.updatedAt,
         strokeCount: data.strokes?.length || 0,
+        textCount: data.textItems?.length || 0,
+        mediaCount: data.media?.length || 0,
         pdfUrl: data.pdfUrl || null,
         thumbnail: data.thumbnail || null,
       });
@@ -107,7 +134,7 @@ function scheduleAutoSave(roomId) {
       saveJam(jam);
     }
     autoSaveTimers.delete(roomId);
-  }, 3000)); // Save 3s after last change
+  }, 500)); // Save 500ms after last change
 }
 
 // ============================
@@ -162,13 +189,22 @@ app.post('/api/upload-pdf', upload.single('pdf'), (req, res) => {
   });
 });
 
-// Image upload
+// Image upload (also includes base64 dataUrl so images persist in jam JSON)
 app.post('/api/upload-image', imageUpload.single('image'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  let dataUrl = null;
+  try {
+    if (req.file.size <= 15 * 1024 * 1024) {
+      const mime = req.file.mimetype || 'image/png';
+      const b64 = fs.readFileSync(req.file.path).toString('base64');
+      dataUrl = `data:${mime};base64,${b64}`;
+    }
+  } catch { /* ignore */ }
   res.json({
     filename: req.file.filename,
     originalname: req.file.originalname,
     url: `/uploads/${req.file.filename}`,
+    dataUrl,
   });
 });
 
@@ -225,6 +261,7 @@ function createRoom(hostId, hostName) {
     strokes: [],
     textItems: [],
     media: [],  // images & youtube embeds
+    viewport: { x: 0, y: 0 },
     pdfUrl: null,
     pdfPage: 1,
     pages: new Map(),
@@ -243,7 +280,10 @@ function createRoom(hostId, hostName) {
 }
 
 function createRoomFromJam(hostId, jam) {
-  const roomId = uuidv4().slice(0, 8);
+  const roomId = jam.roomId || jam.id.slice(0, 8);
+  if (rooms.has(roomId)) {
+    return rooms.get(roomId);
+  }
   const pagesMap = new Map();
   if (jam.pages) {
     for (const [page, strokes] of Object.entries(jam.pages)) {
@@ -258,6 +298,7 @@ function createRoomFromJam(hostId, jam) {
     strokes: jam.strokes || [],
     textItems: jam.textItems || [],
     media: jam.media || [],
+    viewport: jam.viewport || { x: 0, y: 0 },
     pdfUrl: jam.pdfUrl || null,
     pdfPage: jam.pdfPage || 1,
     pages: pagesMap,
@@ -268,7 +309,27 @@ function createRoomFromJam(hostId, jam) {
     thumbnail: jam.thumbnail || null,
   };
   rooms.set(roomId, room);
+  if (!jam.roomId) {
+    jam.roomId = roomId;
+    saveJam(jam);
+  }
   return room;
+}
+
+function getOrRestoreRoom(roomIdOrJamId, hostId) {
+  if (!roomIdOrJamId) return null;
+  const target = String(roomIdOrJamId).trim();
+  if (rooms.has(target)) return rooms.get(target);
+
+  for (const room of rooms.values()) {
+    if (room.jamId === target) return room;
+  }
+
+  const jam = loadJam(target) || findJamByRoomId(target);
+  if (jam) {
+    return createRoomFromJam(hostId, jam);
+  }
+  return null;
 }
 
 function getRoomInfo(room) {
@@ -331,6 +392,7 @@ function getRoomState(room) {
     strokes: room.strokes,
     textItems: room.textItems || [],
     media: room.media || [],
+    viewport: room.viewport || { x: 0, y: 0 },
     pdfStrokes: room.pdfUrl ? (room.pages.get(room.pdfPage) || []) : [],
   };
 }
@@ -344,20 +406,29 @@ io.on('connection', (socket) => {
 
   socket.on('create-room', ({ name, jamId, clientId }, callback) => {
     let room;
-    // If opening an existing jam, load it
+    // If opening an existing jam, load or join its active room
     if (jamId) {
-      const jam = loadJam(jamId);
-      if (jam) {
-        room = createRoomFromJam(socket.id, jam);
-      } else {
+      room = getOrRestoreRoom(jamId, socket.id);
+      if (!room) {
         room = createRoom(socket.id, name);
       }
     } else {
       room = createRoom(socket.id, name);
     }
 
-    const userColor = USER_COLORS[0];
-    room.hostClientId = clientId;
+    const pendingUser = findPendingUser(room.id, clientId, name);
+    const restoredUser = pendingUser ? clearPendingDisconnect(pendingUser[0], room) : null;
+    for (const [existingSocketId, user] of room.users.entries()) {
+      if (existingSocketId !== socket.id && clientId && user.clientId === clientId) {
+        room.users.delete(existingSocketId);
+      }
+    }
+
+    const userColor = getNextUserColor(room, restoredUser?.color);
+    if (!room.host || !room.users.has(room.host)) {
+      room.host = socket.id;
+      room.hostClientId = clientId;
+    }
     room.users.set(socket.id, { name, color: userColor, clientId });
     socket.join(room.id);
     currentRoom = room.id;
@@ -370,29 +441,49 @@ io.on('connection', (socket) => {
       color: userColor,
       ...getRoomState(room),
     });
+
+    socket.to(room.id).emit('user-joined', {
+      id: socket.id,
+      name,
+      color: userColor,
+      room: getRoomInfo(room),
+    });
   });
 
   socket.on('join-room', ({ roomId, name, clientId }, callback) => {
-    const room = rooms.get(roomId);
+    const room = getOrRestoreRoom(roomId, socket.id);
     if (!room) return callback({ success: false, error: 'Room not found' });
-    if (room.users.size + getReservedUserCount(roomId) >= MAX_USERS_PER_ROOM)
+
+    const pendingUser = findPendingUser(room.id, clientId, name);
+    const restoredUser = pendingUser ? clearPendingDisconnect(pendingUser[0], room) : null;
+    for (const [existingSocketId, user] of room.users.entries()) {
+      if (existingSocketId !== socket.id && clientId && user.clientId === clientId) {
+        room.users.delete(existingSocketId);
+      }
+    }
+
+    if (!restoredUser && room.users.size + getReservedUserCount(room.id) >= MAX_USERS_PER_ROOM)
       return callback({ success: false, error: 'Room is full (max 4 users)' });
 
-    const userColor = getNextUserColor(room);
+    const userColor = getNextUserColor(room, restoredUser?.color);
+    if (!room.host || !room.users.has(room.host)) {
+      room.host = socket.id;
+      room.hostClientId = clientId;
+    }
     room.users.set(socket.id, { name, color: userColor, clientId });
-    socket.join(roomId);
-    currentRoom = roomId;
+    socket.join(room.id);
+    currentRoom = room.id;
     currentClientId = clientId;
 
     callback({
       success: true,
-      roomId,
+      roomId: room.id,
       userId: socket.id,
       color: userColor,
       ...getRoomState(room),
     });
 
-    socket.to(roomId).emit('user-joined', {
+    socket.to(room.id).emit('user-joined', {
       id: socket.id,
       name,
       color: userColor,
@@ -527,6 +618,7 @@ io.on('connection', (socket) => {
     const room = rooms.get(currentRoom);
     if (room && typeof data?.x === 'number' && typeof data?.y === 'number') {
       room.viewport = { x: data.x, y: data.y };
+      scheduleAutoSave(currentRoom);
     }
     socket.to(currentRoom).emit('viewport-change', { ...data, userId: socket.id });
   });
@@ -630,35 +722,43 @@ io.on('connection', (socket) => {
     io.to(currentRoom).emit('jam-renamed', { title: data.title });
   });
 
-  // Rejoin after reconnect (same room, same user)
-  socket.on('rejoin-room', ({ roomId, name, clientId }, callback) => {
-    const room = rooms.get(roomId);
+  // Rejoin after reconnect or returning later (same room, same user)
+  socket.on('rejoin-room', ({ roomId, jamId, name, clientId }, callback) => {
+    const room = getOrRestoreRoom(roomId || jamId, socket.id);
     if (!room) return callback({ success: false, error: 'Room not found' });
 
-    const pendingUser = findPendingUser(roomId, clientId, name);
+    const pendingUser = findPendingUser(room.id, clientId, name);
     const restoredUser = pendingUser ? clearPendingDisconnect(pendingUser[0], room) : null;
 
-    if (!restoredUser && room.users.size + getReservedUserCount(roomId) >= MAX_USERS_PER_ROOM) {
+    for (const [sockId, u] of room.users.entries()) {
+      if (clientId && u.clientId === clientId && sockId !== socket.id) {
+        room.users.delete(sockId);
+      }
+    }
+
+    if (!restoredUser && room.users.size + getReservedUserCount(room.id) >= MAX_USERS_PER_ROOM) {
       return callback({ success: false, error: 'Room is full (max 4 users)' });
     }
 
     const userColor = getNextUserColor(room, restoredUser?.color);
-    if (restoredUser && room.host === pendingUser[0]) room.host = socket.id;
+    if ((restoredUser && room.host === pendingUser[0]) || !room.users.has(room.host)) {
+      room.host = socket.id;
+    }
     if (room.hostClientId && room.hostClientId === clientId) room.host = socket.id;
     room.users.set(socket.id, { name, color: userColor, clientId });
-    socket.join(roomId);
-    currentRoom = roomId;
+    socket.join(room.id);
+    currentRoom = room.id;
     currentClientId = clientId;
 
     callback({
       success: true,
-      roomId,
+      roomId: room.id,
       userId: socket.id,
       color: userColor,
       ...getRoomState(room),
     });
 
-    socket.to(roomId).emit('user-joined', {
+    socket.to(room.id).emit('user-joined', {
       id: socket.id,
       name,
       color: userColor,
@@ -673,6 +773,11 @@ io.on('connection', (socket) => {
 
     const userInfo = room.users.get(socket.id);
     const roomId = currentRoom;
+
+    // Immediately persist the jam on any user disconnect so nothing is ever lost
+    if (room.jamId) {
+      saveJam(roomToJam(room));
+    }
 
     // Don't remove immediately - give a grace period for reconnection
     room.users.delete(socket.id);

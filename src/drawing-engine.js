@@ -1191,7 +1191,7 @@ export class DrawingEngine {
   addMedia(item) {
     this.mediaItems.push(item);
     if (item.type === 'image') {
-      this._loadImage(item.url);
+      this._loadImage(item.url, item.dataUrl);
     }
   }
 
@@ -1203,14 +1203,20 @@ export class DrawingEngine {
     this.mediaItems = items;
     for (const item of items) {
       if (item.type === 'image') {
-        this._loadImage(item.url);
+        this._loadImage(item.url, item.dataUrl);
       }
     }
   }
 
-  _loadImage(url) {
+  _loadImage(url, fallbackDataUrl = null) {
     if (this._imageCache.has(url)) return;
     const img = new Image();
+    if (fallbackDataUrl && fallbackDataUrl !== url) {
+      img.onerror = () => {
+        img.onerror = null;
+        img.src = fallbackDataUrl;
+      };
+    }
     img.src = url;
     this._imageCache.set(url, img);
   }

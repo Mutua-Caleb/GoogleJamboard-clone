@@ -82,9 +82,9 @@ export class CollaborationManager {
     });
   }
 
-  rejoinRoom(roomId, name) {
+  rejoinRoom(roomId, name, jamId = null) {
     return new Promise((resolve) => {
-      this.socket.emit('rejoin-room', { roomId, name, clientId: this.clientId }, (response) => {
+      this.socket.emit('rejoin-room', { roomId, jamId, name, clientId: this.clientId }, (response) => {
         if (response.success) {
           this.roomId = response.roomId;
           this.userId = response.userId;

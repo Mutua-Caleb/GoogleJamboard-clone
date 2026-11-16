@@ -33,9 +33,11 @@ class CollabBoardApp {
     if (savedName) this.nameInput.value = savedName;
 
     // Lobby buttons
+    document.getElementById('btn-rejoin-board')?.addEventListener('click', () => this._rejoinLastBoard());
     document.getElementById('btn-create').addEventListener('click', () => this._createRoom());
     document.getElementById('btn-join').addEventListener('click', () => this._joinRoom());
     document.getElementById('btn-my-jams').addEventListener('click', () => this._showNotebook());
+    this._updateRejoinButton();
 
     this.nameInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this._createRoom();
@@ -430,6 +432,7 @@ class CollabBoardApp {
     if (title && this._currentRoomInfo) {
       this._currentRoomInfo.title = title;
       this.collab.renameJam(title);
+      this._saveSession();
     }
   }
 
@@ -601,30 +604,40 @@ class CollabBoardApp {
     formData.append('image', file, filename);
 
     let imageUrl = null;
+    let dataUrl = null;
     try {
       this._showToast('Adding image...');
       const res = await fetch('/api/upload-image', { method: 'POST', body: formData });
       if (res.ok) {
         const data = await res.json();
         if (data?.url) imageUrl = data.url;
+        if (data?.dataUrl) dataUrl = data.dataUrl;
       }
     } catch {
       // Fallback to data URL below
     }
 
-    if (!imageUrl) {
+    if (!dataUrl) {
       try {
-        imageUrl = await this._fileToDataUrl(file);
+        dataUrl = await this._fileToDataUrl(file);
       } catch {
+        // Ignore if imageUrl succeeded
+      }
+    }
+
+    if (!imageUrl) {
+      if (dataUrl) {
+        imageUrl = dataUrl;
+      } else {
         this._showToast('Failed to load pasted image', 'error');
         return;
       }
     }
 
-    await this._addImageFromUrl(imageUrl);
+    await this._addImageFromUrl(imageUrl, dataUrl);
   }
 
-  async _addImageFromUrl(url) {
+  async _addImageFromUrl(url, dataUrl = null) {
     try {
       const img = new Image();
       img.src = url;
@@ -665,6 +678,7 @@ class CollabBoardApp {
         id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         type: 'image',
         url,
+        dataUrl: dataUrl || (url.startsWith('data:image/') ? url : null),
         x, y, width, height,
       };
 
@@ -1065,7 +1079,13 @@ class CollabBoardApp {
 
   _leaveRoom() {
     this._saveThumbnail();
+    this._saveLastBoard();
     this._clearSession();
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('room');
+      window.history.replaceState({}, '', url.pathname + url.search);
+    } catch {}
     if (this._thumbnailInterval) clearInterval(this._thumbnailInterval);
     if (this._ytUpdateInterval) { clearInterval(this._ytUpdateInterval); this._ytUpdateInterval = null; }
     document.querySelectorAll('.youtube-overlay').forEach((el) => el.remove());
@@ -1085,6 +1105,7 @@ class CollabBoardApp {
 
     this.lobbyEl.classList.remove('hidden');
     this.boardEl.classList.add('hidden');
+    this._updateRejoinButton();
 
     if (this.pdfViewer) {
       this.pdfViewer.destroy();
@@ -1226,6 +1247,10 @@ class CollabBoardApp {
       hour: '2-digit', minute: '2-digit',
     });
 
+    const stats = [`${jam.strokeCount || 0} stroke${jam.strokeCount !== 1 ? 's' : ''}`];
+    if (jam.textCount) stats.push(`${jam.textCount} note${jam.textCount !== 1 ? 's' : ''}`);
+    if (jam.mediaCount) stats.push(`${jam.mediaCount} media`);
+
     card.innerHTML = `
       <div class="jam-card-thumb">
         ${jam.thumbnail
@@ -1243,7 +1268,7 @@ class CollabBoardApp {
         <div class="jam-card-title">${this._escapeHtml(jam.title)}</div>
         <div class="jam-card-meta">
           <span>${time}</span>
-          <span>${jam.strokeCount} stroke${jam.strokeCount !== 1 ? 's' : ''}</span>
+          <span>${stats.join(' · ')}</span>
         </div>
       </div>
       <div class="jam-card-actions">
@@ -1291,6 +1316,11 @@ class CollabBoardApp {
     cardEl.classList.add('jam-card-deleting');
     try {
       await fetch(`/api/jams/${jamId}`, { method: 'DELETE' });
+      const lastBoard = this._getLastBoard();
+      if (lastBoard && lastBoard.jamId === jamId) {
+        try { localStorage.removeItem('collabboard-last-board'); } catch {}
+        this._updateRejoinButton();
+      }
       setTimeout(() => {
         cardEl.remove();
         // Check if section is now empty
@@ -1473,7 +1503,7 @@ class CollabBoardApp {
 
     try {
       this.engine?.clearTransientStrokes();
-      const response = await this.collab.rejoinRoom(this.collab.roomId, this.collab.userName);
+      const response = await this.collab.rejoinRoom(this.collab.roomId, this.collab.userName, this.currentJamId);
       if (response.success) {
         await this._applyRoomState(response);
         this._saveSession();
@@ -1493,13 +1523,90 @@ class CollabBoardApp {
   // Session persistence
   _saveSession() {
     try {
-      localStorage.setItem('collabboard-session', JSON.stringify({
+      const payload = {
         jamId: this.currentJamId,
         roomId: this.collab.roomId,
+        title: this._currentRoomInfo?.title || 'Untitled Jam',
         name: this.collab.userName,
+        timestamp: Date.now(),
+      };
+      localStorage.setItem('collabboard-session', JSON.stringify(payload));
+      localStorage.setItem('collabboard-last-board', JSON.stringify(payload));
+      if (this.collab.roomId) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('room', this.collab.roomId);
+        window.history.replaceState({}, '', url.pathname + url.search);
+      }
+      this._updateRejoinButton();
+    } catch {}
+  }
+
+  _saveLastBoard() {
+    if (!this.collab.roomId && !this.currentJamId) return;
+    try {
+      localStorage.setItem('collabboard-last-board', JSON.stringify({
+        jamId: this.currentJamId,
+        roomId: this.collab.roomId,
+        title: this._currentRoomInfo?.title || 'Untitled Jam',
+        name: this.collab.userName || this._getSavedName(),
         timestamp: Date.now(),
       }));
     } catch {}
+  }
+
+  _getLastBoard() {
+    try {
+      const raw = localStorage.getItem('collabboard-last-board');
+      if (!raw) return null;
+      const board = JSON.parse(raw);
+      if (Date.now() - (board.timestamp || 0) > 365 * 24 * 60 * 60 * 1000) {
+        localStorage.removeItem('collabboard-last-board');
+        return null;
+      }
+      return board;
+    } catch { return null; }
+  }
+
+  _updateRejoinButton() {
+    const btn = document.getElementById('btn-rejoin-board');
+    const label = document.getElementById('rejoin-board-label');
+    if (!btn || !label) return;
+
+    const last = this._getLastBoard() || this._getSavedSession();
+    if (last && (last.roomId || last.jamId)) {
+      const codeSuffix = last.roomId ? ` (#${last.roomId})` : '';
+      label.textContent = `Rejoin Board${codeSuffix}`;
+      btn.classList.remove('hidden');
+    } else {
+      btn.classList.add('hidden');
+    }
+  }
+
+  async _rejoinLastBoard() {
+    const last = this._getLastBoard() || this._getSavedSession();
+    if (!last) return;
+
+    const name = this.nameInput.value.trim() || last.name || this._getSavedName();
+    if (!name) {
+      this.nameInput.focus();
+      this._shakeElement(this.nameInput);
+      return;
+    }
+    this._saveName(name);
+
+    const response = await this.collab.rejoinRoom(last.roomId, name, last.jamId);
+    if (response.success) {
+      this._currentRoomInfo = response.room;
+      this.currentJamId = response.room.jamId;
+      this._enterBoard();
+      await this._applyRoomState(response);
+      this._saveSession();
+      this._showToast('Rejoined your board');
+    } else if (last.jamId) {
+      await this._createRoom(last.jamId);
+    } else {
+      this._showToast(response.error || 'Could not find previous board', 'error');
+    }
   }
 
   _clearSession() {
@@ -1511,8 +1618,8 @@ class CollabBoardApp {
       const raw = localStorage.getItem('collabboard-session');
       if (!raw) return null;
       const session = JSON.parse(raw);
-      // Sessions older than 7 days are stale
-      if (Date.now() - session.timestamp > 7 * 24 * 60 * 60 * 1000) {
+      // Keep persistent board sessions for up to 365 days
+      if (Date.now() - session.timestamp > 365 * 24 * 60 * 60 * 1000) {
         this._clearSession();
         return null;
       }
@@ -1521,8 +1628,17 @@ class CollabBoardApp {
   }
 
   async _tryAutoRejoin() {
+    let urlRoomId = null;
+    try {
+      urlRoomId = new URLSearchParams(window.location.search).get('room')?.trim() || null;
+    } catch {}
+
     const session = this._getSavedSession();
-    if (!session || !session.jamId || !session.name) return;
+    const targetRoomId = urlRoomId || session?.roomId || null;
+    const targetJamId = urlRoomId ? null : (session?.jamId || null);
+    const targetName = session?.name || this._getSavedName();
+
+    if ((!targetRoomId && !targetJamId) || !targetName) return;
 
     // Wait for socket connection
     await new Promise((resolve) => {
@@ -1530,21 +1646,21 @@ class CollabBoardApp {
       this.collab.on('connected', resolve);
     });
 
-    this.nameInput.value = session.name;
-    if (session.roomId) {
-      const response = await this.collab.rejoinRoom(session.roomId, session.name);
-      if (response.success) {
-        this._currentRoomInfo = response.room;
-        this.currentJamId = response.room.jamId;
-        this._enterBoard();
-        await this._applyRoomState(response);
-        this._saveSession();
-        this._showToast('Rejoined your board');
-        return;
-      }
+    this.nameInput.value = targetName;
+    const response = await this.collab.rejoinRoom(targetRoomId, targetName, targetJamId);
+    if (response.success) {
+      this._currentRoomInfo = response.room;
+      this.currentJamId = response.room.jamId;
+      this._enterBoard();
+      await this._applyRoomState(response);
+      this._saveSession();
+      this._showToast('Rejoined your board');
+      return;
     }
 
-    await this._createRoom(session.jamId);
+    if (targetJamId) {
+      await this._createRoom(targetJamId);
+    }
   }
 
   // Remember name across sessions
