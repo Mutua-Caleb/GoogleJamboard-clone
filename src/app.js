@@ -380,7 +380,7 @@ class CollabBoardApp {
       onRemoveText: (data) => this.collab.sendRemoveText(data),
       onUpdateText: (data) => this.collab.sendUpdateText(data),
       onMoveMedia: (data) => this.collab.sendMoveMedia(data),
-      onRemoveMedia: (id) => this.collab.sendRemoveMedia(id),
+      onRemoveMedia: (data) => this.collab.sendRemoveMedia(typeof data === 'string' ? { id: data } : data),
     });
 
     this._selectTool('pen');
@@ -400,7 +400,7 @@ class CollabBoardApp {
     this.engine?.setTool(tool);
 
     const canvas = document.getElementById('draw-canvas');
-    canvas.style.cursor = tool === 'text' ? 'text' : 'crosshair';
+    canvas.style.cursor = tool === 'text' ? 'text' : tool === 'select' ? 'default' : 'crosshair';
   }
 
   _selectColor(color) {
@@ -1450,11 +1450,20 @@ class CollabBoardApp {
       return;
     }
 
+    if ((e.key === 'Delete' || e.key === 'Backspace') && this.engine?.selectedMediaId) {
+      e.preventDefault();
+      const id = this.engine.selectedMediaId;
+      this.engine.removeMedia(id);
+      this.collab.sendRemoveMedia({ id });
+      return;
+    }
+
     if (e.key === 'p' || e.key === '1') this._selectTool('pen');
     else if (e.key === 'l' || e.key === '2') this._selectTool('pencil');
     else if (e.key === 'h' || e.key === '3') this._selectTool('highlighter');
     else if (e.key === 'e' || e.key === '4') this._selectTool('eraser');
     else if (e.key === 't' || e.key === '5') this._selectTool('text');
+    else if (e.key === 'm' || e.key === 'M' || e.key === '6') this._selectTool('select');
     else if (e.key === 'f' || e.key === 'F') {
       e.preventDefault();
       this._toggleFullscreen();

@@ -28,6 +28,10 @@ export class DrawingEngine {
     // Media items (images rendered on canvas)
     this.mediaItems = [];
     this._imageCache = new Map();
+    this.selectedMediaId = null;
+    this.hoveredMediaId = null;
+    this._mediaAction = null;
+    this._textDragAction = null;
 
     // Text items rendered on canvas
     this.textItems = [];
@@ -106,9 +110,15 @@ export class DrawingEngine {
     window.addEventListener('keyup', (e) => {
       if (e.code === 'Space') {
         this.isSpacePressed = false;
-        if (!this.isPanning) this.canvas.style.cursor = this.tool === 'text' ? 'text' : 'crosshair';
+        if (!this.isPanning) this._updateDefaultCursor();
       }
     });
+  }
+
+  _updateDefaultCursor() {
+    if (this.tool === 'text') this.canvas.style.cursor = 'text';
+    else if (this.tool === 'select') this.canvas.style.cursor = 'default';
+    else this.canvas.style.cursor = 'crosshair';
   }
 
   _getCanvasPoint(e) {
@@ -117,6 +127,83 @@ export class DrawingEngine {
       x: (e.clientX - rect.left - this.transform.x) / this.transform.scale,
       y: (e.clientY - rect.top - this.transform.y) / this.transform.scale,
     };
+  }
+
+  _getMediaControlRects(item) {
+    const btnH = 26;
+    const deleteW = 26;
+    const lockW = 112;
+    const pad = 8;
+    const deleteRect = {
+      x: item.x + item.width - deleteW - pad,
+      y: item.y + pad,
+      w: deleteW,
+      h: btnH,
+    };
+    const lockRect = {
+      x: deleteRect.x - lockW - 6,
+      y: item.y + pad,
+      w: lockW,
+      h: btnH,
+    };
+    return { lockRect, deleteRect };
+  }
+
+  _getMediaInteractionAt(point) {
+    const handleRadius = 12;
+    for (let i = this.mediaItems.length - 1; i >= 0; i--) {
+      const item = this.mediaItems[i];
+      if (item.type !== 'image') continue;
+
+      const isActive = item.id === this.hoveredMediaId || item.id === this.selectedMediaId;
+      if (isActive) {
+        const { lockRect, deleteRect } = this._getMediaControlRects(item);
+        if (
+          point.x >= deleteRect.x &&
+          point.x <= deleteRect.x + deleteRect.w &&
+          point.y >= deleteRect.y &&
+          point.y <= deleteRect.y + deleteRect.h
+        ) {
+          return { action: 'delete', item };
+        }
+        if (
+          point.x >= lockRect.x &&
+          point.x <= lockRect.x + lockRect.w &&
+          point.y >= lockRect.y &&
+          point.y <= lockRect.y + lockRect.h
+        ) {
+          return { action: 'toggle-lock', item };
+        }
+      }
+
+      const canManipulate = !item.locked || this.tool === 'select';
+      if (canManipulate) {
+        const corners = [
+          { name: 'resize-nw', cx: item.x, cy: item.y },
+          { name: 'resize-ne', cx: item.x + item.width, cy: item.y },
+          { name: 'resize-sw', cx: item.x, cy: item.y + item.height },
+          { name: 'resize-se', cx: item.x + item.width, cy: item.y + item.height },
+        ];
+        for (const c of corners) {
+          if (Math.abs(point.x - c.cx) <= handleRadius && Math.abs(point.y - c.cy) <= handleRadius) {
+            return { action: c.name, item };
+          }
+        }
+      }
+
+      if (
+        point.x >= item.x &&
+        point.x <= item.x + item.width &&
+        point.y >= item.y &&
+        point.y <= item.y + item.height
+      ) {
+        if (canManipulate) {
+          return { action: 'move', item };
+        }
+        return { action: 'locked-hover', item };
+      }
+    }
+    return null;
   }
 
   _onPointerDown(e) {
@@ -132,6 +219,77 @@ export class DrawingEngine {
 
     const point = this._getCanvasPoint(e);
     this.lastCursorPoint = point;
+
+    // Check image interaction (drag, resize, lock/unlock, delete)
+    // Skip direct image drag only if eraser is actively erasing strokes or text tool is clicking existing text
+    const mediaHit = this.tool === 'eraser' ? null : this._getMediaInteractionAt(point);
+    if (mediaHit) {
+      if (mediaHit.action === 'delete') {
+        e.preventDefault();
+        const id = mediaHit.item.id;
+        this.removeMedia(id);
+        this.callbacks.onRemoveMedia?.({ id });
+        this._updateDefaultCursor();
+        return;
+      }
+      if (mediaHit.action === 'toggle-lock') {
+        e.preventDefault();
+        mediaHit.item.locked = !mediaHit.item.locked;
+        this.selectedMediaId = mediaHit.item.locked ? null : mediaHit.item.id;
+        return;
+      }
+      if (mediaHit.action === 'move' || mediaHit.action.startsWith('resize-')) {
+        e.preventDefault();
+        if (this._activeTextInput) this._commitTextInput();
+        this.selectedMediaId = mediaHit.item.id;
+        this.hoveredMediaId = mediaHit.item.id;
+        this._mediaAction = {
+          type: mediaHit.action,
+          item: mediaHit.item,
+          pointerId: e.pointerId,
+          startX: point.x,
+          startY: point.y,
+          origX: mediaHit.item.x,
+          origY: mediaHit.item.y,
+          origW: mediaHit.item.width,
+          origH: mediaHit.item.height,
+          aspect: (mediaHit.item.width || 1) / (mediaHit.item.height || 1),
+          lastSync: 0,
+        };
+        this.canvas.setPointerCapture?.(e.pointerId);
+        this.canvas.style.cursor = mediaHit.action === 'move'
+          ? 'grabbing'
+          : (mediaHit.action === 'resize-nw' || mediaHit.action === 'resize-se' ? 'nwse-resize' : 'nesw-resize');
+        return;
+      }
+    }
+
+    this.selectedMediaId = null;
+
+    // Select/Move tool: drag text notes or pan canvas
+    if (this.tool === 'select') {
+      const clickedText = this._findTextItemAt(point);
+      if (clickedText) {
+        e.preventDefault();
+        if (this._activeTextInput) this._commitTextInput();
+        this._textDragAction = {
+          item: clickedText,
+          pointerId: e.pointerId,
+          startX: point.x,
+          startY: point.y,
+          origX: clickedText.x,
+          origY: clickedText.y,
+          lastSync: 0,
+        };
+        this.canvas.setPointerCapture?.(e.pointerId);
+        this.canvas.style.cursor = 'grabbing';
+        return;
+      }
+      this.isPanning = true;
+      this.panStart = { x: e.clientX - this.transform.x, y: e.clientY - this.transform.y };
+      this.canvas.style.cursor = 'grabbing';
+      return;
+    }
 
     // Text tool: open text input at click position (or edit clicked text item)
     if (this.tool === 'text') {
@@ -191,6 +349,73 @@ export class DrawingEngine {
     // Cursor tracking
     this.callbacks.onCursorMove?.({ x: point.x, y: point.y });
 
+    if (this._mediaAction && e.pointerId === this._mediaAction.pointerId) {
+      const { type, item, startX, startY, origX, origY, origW, origH, aspect } = this._mediaAction;
+      const dx = point.x - startX;
+      const dy = point.y - startY;
+
+      if (type === 'move') {
+        item.x = Math.round(origX + dx);
+        item.y = Math.round(origY + dy);
+      } else {
+        const minSize = 60;
+        let newW = origW;
+        let newH = origH;
+        if (type === 'resize-se') {
+          newW = Math.max(minSize, origW + dx);
+          newH = e.shiftKey ? Math.max(minSize, origH + dy) : Math.max(minSize, Math.round(newW / aspect));
+        } else if (type === 'resize-sw') {
+          newW = Math.max(minSize, origW - dx);
+          newH = e.shiftKey ? Math.max(minSize, origH + dy) : Math.max(minSize, Math.round(newW / aspect));
+          item.x = Math.round(origX + origW - newW);
+        } else if (type === 'resize-ne') {
+          newW = Math.max(minSize, origW + dx);
+          newH = e.shiftKey ? Math.max(minSize, origH - dy) : Math.max(minSize, Math.round(newW / aspect));
+          item.y = Math.round(origY + origH - newH);
+        } else if (type === 'resize-nw') {
+          newW = Math.max(minSize, origW - dx);
+          newH = e.shiftKey ? Math.max(minSize, origH - dy) : Math.max(minSize, Math.round(newW / aspect));
+          item.x = Math.round(origX + origW - newW);
+          item.y = Math.round(origY + origH - newH);
+        }
+        item.width = Math.round(newW);
+        item.height = Math.round(newH);
+      }
+
+      const now = Date.now();
+      if (now - this._mediaAction.lastSync >= 30) {
+        this._mediaAction.lastSync = now;
+        this.callbacks.onMoveMedia?.({
+          id: item.id,
+          x: item.x,
+          y: item.y,
+          width: item.width,
+          height: item.height,
+        });
+      }
+      return;
+    }
+
+    if (this._textDragAction && e.pointerId === this._textDragAction.pointerId) {
+      const { item, startX, startY, origX, origY } = this._textDragAction;
+      item.x = Math.round(origX + (point.x - startX));
+      item.y = Math.round(origY + (point.y - startY));
+      const now = Date.now();
+      if (now - this._textDragAction.lastSync >= 30) {
+        this._textDragAction.lastSync = now;
+        this.callbacks.onUpdateText?.({
+          id: item.id,
+          text: item.text,
+          x: item.x,
+          y: item.y,
+          color: item.color,
+          fontSize: item.fontSize,
+          layer: item.layer,
+        });
+      }
+      return;
+    }
+
     if (this.isPanning) {
       this.transform.x = e.clientX - this.panStart.x;
       this.transform.y = e.clientY - this.panStart.y;
@@ -199,7 +424,30 @@ export class DrawingEngine {
       return;
     }
 
-    if (!this.isDrawing || !this.currentStroke || e.pointerId !== this.activePointerId) return;
+    if (!this.isDrawing) {
+      const hit = this.tool === 'eraser' ? null : this._getMediaInteractionAt(point);
+      this.hoveredMediaId = hit ? hit.item.id : null;
+      if (hit) {
+        if (hit.action === 'delete' || hit.action === 'toggle-lock') {
+          this.canvas.style.cursor = 'pointer';
+        } else if (hit.action === 'resize-nw' || hit.action === 'resize-se') {
+          this.canvas.style.cursor = 'nwse-resize';
+        } else if (hit.action === 'resize-ne' || hit.action === 'resize-sw') {
+          this.canvas.style.cursor = 'nesw-resize';
+        } else if (hit.action === 'move') {
+          this.canvas.style.cursor = 'grab';
+        } else {
+          this._updateDefaultCursor();
+        }
+      } else if (this.tool === 'select' && this._findTextItemAt(point)) {
+        this.canvas.style.cursor = 'grab';
+      } else if (!this.isSpacePressed) {
+        this._updateDefaultCursor();
+      }
+      return;
+    }
+
+    if (!this.currentStroke || e.pointerId !== this.activePointerId) return;
 
     const pressure = e.pressure !== undefined && e.pressure > 0 ? e.pressure : 0.5;
     this.currentStroke.points.push({ x: point.x, y: point.y, pressure });
@@ -215,9 +463,45 @@ export class DrawingEngine {
   }
 
   _onPointerUp(e) {
+    if (this._mediaAction && e.pointerId === this._mediaAction.pointerId) {
+      const { item } = this._mediaAction;
+      this.callbacks.onMoveMedia?.({
+        id: item.id,
+        x: item.x,
+        y: item.y,
+        width: item.width,
+        height: item.height,
+      });
+      this._mediaAction = null;
+      if (this.canvas.hasPointerCapture?.(e.pointerId)) {
+        this.canvas.releasePointerCapture(e.pointerId);
+      }
+      this.canvas.style.cursor = 'grab';
+      return;
+    }
+
+    if (this._textDragAction && e.pointerId === this._textDragAction.pointerId) {
+      const { item } = this._textDragAction;
+      this.callbacks.onUpdateText?.({
+        id: item.id,
+        text: item.text,
+        x: item.x,
+        y: item.y,
+        color: item.color,
+        fontSize: item.fontSize,
+        layer: item.layer,
+      });
+      this._textDragAction = null;
+      if (this.canvas.hasPointerCapture?.(e.pointerId)) {
+        this.canvas.releasePointerCapture(e.pointerId);
+      }
+      this._updateDefaultCursor();
+      return;
+    }
+
     if (this.isPanning) {
       this.isPanning = false;
-      this.canvas.style.cursor = this.tool === 'text' ? 'text' : 'crosshair';
+      this._updateDefaultCursor();
       return;
     }
 
@@ -241,12 +525,14 @@ export class DrawingEngine {
   }
 
   cancelActiveStroke() {
-    if (!this.isDrawing && !this.isPanning) return;
+    if (!this.isDrawing && !this.isPanning && !this._mediaAction && !this._textDragAction) return;
     this.isDrawing = false;
     this.isPanning = false;
+    this._mediaAction = null;
+    this._textDragAction = null;
     this.currentStroke = null;
     this.activePointerId = null;
-    this.canvas.style.cursor = this.tool === 'text' ? 'text' : 'crosshair';
+    this._updateDefaultCursor();
   }
 
   _onWheel(e) {
@@ -628,6 +914,9 @@ export class DrawingEngine {
 
     // Draw text items
     this._drawTextItems();
+
+    // Draw interactive selection/hover controls for images
+    this._drawMediaControls();
 
     // Draw remote viewports
     this._drawRemoteViewports();
@@ -1192,11 +1481,14 @@ export class DrawingEngine {
     this.mediaItems.push(item);
     if (item.type === 'image') {
       this._loadImage(item.url, item.dataUrl);
+      this.selectedMediaId = item.id;
     }
   }
 
   removeMedia(id) {
     this.mediaItems = this.mediaItems.filter((m) => m.id !== id);
+    if (this.selectedMediaId === id) this.selectedMediaId = null;
+    if (this.hoveredMediaId === id) this.hoveredMediaId = null;
   }
 
   setMedia(items) {
@@ -1236,6 +1528,83 @@ export class DrawingEngine {
         }
       }
       // YouTube items are rendered as DOM overlays, not on canvas
+    }
+  }
+
+  _drawMediaControls() {
+    const { ctx } = this;
+    for (const item of this.mediaItems) {
+      if (item.type !== 'image') continue;
+      const isSelected = item.id === this.selectedMediaId;
+      const isHovered = item.id === this.hoveredMediaId;
+      if (!isSelected && !isHovered) continue;
+
+      const x = Math.round(item.x);
+      const y = Math.round(item.y);
+      const w = Math.round(item.width);
+      const h = Math.round(item.height);
+      const canManipulate = !item.locked || this.tool === 'select';
+
+      ctx.save();
+
+      if (canManipulate) {
+        // Selection / hover border
+        ctx.strokeStyle = isSelected ? '#7C3AED' : 'rgba(124, 58, 237, 0.75)';
+        ctx.lineWidth = isSelected ? 2 : 1.5;
+        ctx.strokeRect(x, y, w, h);
+
+        // 4 corner resize handles
+        const handleSize = 10;
+        const corners = [
+          [x, y],
+          [x + w, y],
+          [x, y + h],
+          [x + w, y + h],
+        ];
+        for (const [cx, cy] of corners) {
+          ctx.fillStyle = '#FFFFFF';
+          ctx.strokeStyle = '#7C3AED';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.rect(cx - handleSize / 2, cy - handleSize / 2, handleSize, handleSize);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+
+      // Top-right action buttons (Lock/Draw toggle + Delete)
+      const { lockRect, deleteRect } = this._getMediaControlRects(item);
+
+      // Lock / Draw Over button
+      ctx.fillStyle = item.locked ? 'rgba(124, 58, 237, 0.92)' : 'rgba(15, 15, 26, 0.85)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(lockRect.x, lockRect.y, lockRect.w, lockRect.h, 6);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = '600 11px Inter, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(
+        item.locked ? 'Unlock to Move' : 'Lock to Draw',
+        lockRect.x + lockRect.w / 2,
+        lockRect.y + lockRect.h / 2
+      );
+
+      // Delete button
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.92)';
+      ctx.beginPath();
+      ctx.roundRect(deleteRect.x, deleteRect.y, deleteRect.w, deleteRect.h, 6);
+      ctx.fill();
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = '700 13px Inter, system-ui, sans-serif';
+      ctx.fillText('✕', deleteRect.x + deleteRect.w / 2, deleteRect.y + deleteRect.h / 2);
+
+      ctx.restore();
     }
   }
 
