@@ -83,6 +83,7 @@ function roomToJam(room, title) {
     strokes: room.strokes,
     textItems: room.textItems || [],
     media: room.media || [],
+    viewport: room.viewport || { x: 0, y: 0 },
     pdfUrl: room.pdfUrl,
     pdfPage: room.pdfPage,
     pages: pagesObj,
@@ -520,9 +521,13 @@ io.on('connection', (socket) => {
     socket.to(currentRoom).emit('cursor-move', { ...data, userId: socket.id });
   });
 
-  // Viewport tracking (scroll/pan/zoom)
+  // Viewport tracking (collaborative scroll/pan sync)
   socket.on('viewport-change', (data) => {
     if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (room && typeof data?.x === 'number' && typeof data?.y === 'number') {
+      room.viewport = { x: data.x, y: data.y };
+    }
     socket.to(currentRoom).emit('viewport-change', { ...data, userId: socket.id });
   });
 

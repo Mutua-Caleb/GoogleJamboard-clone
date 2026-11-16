@@ -326,6 +326,11 @@ class CollabBoardApp {
       if (item.type === 'youtube') this._createYouTubeOverlay(item);
     }
 
+    if (response.viewport) {
+      this.engine.applyRemoteViewport(response.viewport);
+      this._updateYouTubeOverlays();
+    }
+
     if (response.room?.pdfUrl) {
       if (!this.pdfMode || !this.pdfViewer) {
         await this._loadPDFFromUrl(response.room.pdfUrl, { silent: true });
@@ -381,12 +386,6 @@ class CollabBoardApp {
 
     // Save session for auto-rejoin
     this._saveSession();
-
-    // Send initial viewport so other users can see where we are
-    setTimeout(() => {
-      const vp = this.engine?._getViewportRect();
-      if (vp) this.collab.sendViewportChange(vp);
-    }, 100);
 
     // Auto-save thumbnail every 30s
     this._thumbnailInterval = setInterval(() => this._saveThumbnail(), 30000);

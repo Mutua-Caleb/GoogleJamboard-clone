@@ -1261,6 +1261,8 @@ export class DrawingEngine {
 
   resetView() {
     this.transform = { x: 0, y: 0, scale: 1 };
+    this._updateActiveTextInputPosition();
+    this._notifyViewportChange();
   }
 
   clearTransientStrokes() {
